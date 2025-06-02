@@ -115,67 +115,6 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler 
 	}
 }
 
-// // use recursion to find previously inserted node to handle request
-// // with node itself and params resolved
-// func (n *_RouteNode) _Find(parts []string, height int, params *map[string]string) *_RouteNode {
-// 	// end recursion when reaching target height
-// 	if len(parts) == height {
-// 		// if it is leaf node, return it
-// 		if n.isLeaf {
-// 			return n
-// 		}
-// 		return nil
-// 	}
-
-// 	// get current part
-// 	part := parts[height]
-// 	children := n._MatchChildren(part)
-
-// 	for _, child := range children {
-// 		// save previous param state for backtracking
-// 		var oldValue string
-// 		var hasOld bool
-
-// 		// save param value
-// 		if child.part[0] == ':' {
-// 			paramKey := child.part[1:]
-// 			oldValue, hasOld = (*params)[paramKey]
-// 			(*params)[paramKey] = part
-// 		}
-
-// 		// then recurse to find
-// 		result := child._Find(parts, height+1, params)
-// 		if result != nil {
-// 			return result
-// 		}
-
-// 		// backtrace after dfs
-// 		if child.part[0] == ':' {
-// 			paramKey := child.part[1:]
-// 			if hasOld {
-// 				(*params)[paramKey] = oldValue
-// 			} else {
-// 				delete(*params, paramKey)
-// 			}
-// 		}
-
-// 		// specfically process asterisk
-// 		if child.part[0] == '*' {
-// 			if len(parts) >= height {
-// 				paramKey := strings.TrimPrefix(child.part, "*")
-// 				if paramKey == "" {
-// 					paramKey = "_"
-// 				}
-// 				(*params)[paramKey] = strings.Join(parts[height:], "/")
-// 				return child
-// 			}
-// 		}
-// 	}
-
-// 	// return nil when no mathcing node
-// 	return nil
-// }
-
 func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string]string) *_RouteNode {
 	// end recursion when matching all parts
 	if height == len(patternParts) {
@@ -250,44 +189,6 @@ func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string
 	}
 
 	return nil
-}
-
-// seek through children of n to find whether there is a child node
-// with the given pattern part when _Insert
-func (n *_RouteNode) _FindChild(part string) *_RouteNode {
-	for _, child := range n.children {
-		if child.part == part {
-			return child
-		}
-	}
-	return nil
-}
-
-// seek through children of n to find children nodes
-// matching the given part when _Find
-// pay attention to the order of nodes(exact > ":" > "*")
-func (n *_RouteNode) _MatchChildren(part string) []*_RouteNode {
-	nodes := make([]*_RouteNode, 0, 3)
-
-	if node := n._FindChild(part); node != nil {
-		nodes = append(nodes, node)
-	}
-
-	for _, child := range n.children {
-		if child.isWildcard && child.part[0] == ':' {
-			nodes = append(nodes, child)
-			break // take firstly matched option
-		}
-	}
-
-	for _, child := range n.children {
-		if child.isWildcard && child.part[0] == '*' {
-			nodes = append(nodes, child)
-			break // take firstly matched option
-		}
-	}
-
-	return nodes
 }
 
 // router controlls the all routes
