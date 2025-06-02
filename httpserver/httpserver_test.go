@@ -111,3 +111,72 @@ func (n *_RouteNode) printAllRoutes() {
 	fmt.Println("\nRegistered Routes:")
 	n.printTree(0)
 }
+
+func TestRouteFind(t *testing.T) {
+	root := &_RouteNode{part: "ROOT"}
+
+	// 注册测试路由
+	routes := []struct {
+		pattern string
+		handler HandlerFunc
+	}{
+		{"/user/profile", func(c Context) {}},
+		{"/user/:id", func(c Context) {}},
+		{"/user/:id/profile", func(c Context) {}},
+		{"/static/*", func(c Context) {}},
+		{"/static/files/*", func(c Context) {}},
+		{"/product/:category/:id", func(c Context) {}},
+	}
+
+	for _, r := range routes {
+		parts := strings.Split(r.pattern, "/")[1:]
+		root._Insert(r.pattern, parts, r.handler)
+	}
+
+	tests := []struct {
+		path    string
+		found   bool
+		pattern string
+		params  map[string]string
+	}{
+		{"/user/profile", true, "/user/profile", nil},
+		{"/user/123", true, "/user/:id", map[string]string{"id": "123"}},
+		{"/user/456/profile", true, "/user/:id/profile", map[string]string{"id": "456"}},
+		{"/static/css/style.css", true, "/static/*", map[string]string{"*": "css/style.css"}},
+		{"/static/files/images/logo.png", true, "/static/files/*", map[string]string{"*": "images/logo.png"}},
+		{"/product/books/789", true, "/product/:category/:id", map[string]string{"category": "books", "id": "789"}},
+		{"/user/", false, "", nil},
+		{"/static", false, "", nil},
+		{"/unknown", false, "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			params := make(map[string]string)
+			parts := strings.Split(tt.path, "/")[1:]
+
+			node := root._Find(parts, 0, &params)
+
+			if tt.found {
+				if node == nil {
+					t.Fatal("Expected to find node but got nil")
+				}
+				if node.pattern != tt.pattern {
+					t.Errorf("Expected pattern %s, got %s", tt.pattern, node.pattern)
+				}
+				if len(params) != len(tt.params) {
+					t.Errorf("Expected %d params, got %d", len(tt.params), len(params))
+				}
+				for k, v := range tt.params {
+					if params[k] != v {
+						t.Errorf("Param %s: expected %s, got %s", k, v, params[k])
+					}
+				}
+			} else {
+				if node != nil {
+					t.Errorf("Expected nil node, got %s", node.pattern)
+				}
+			}
+		})
+	}
+}

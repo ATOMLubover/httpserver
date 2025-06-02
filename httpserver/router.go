@@ -26,9 +26,17 @@ type _RouteNode struct {
 func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler HandlerFunc) {
 	// n is parent actually, so just end the recursion and modify n
 	if len(patternParts) == 0 {
+		if n.handler != nil {
+			slog.Warn(fmt.Sprintf("Route '%s' already exists, overwriting...",
+				fullPattern))
+		}
+
 		n.pattern = fullPattern
 		n.isLeaf = true
 		n.handler = handler
+
+		slog.Info("Inserted route: " + fullPattern)
+
 		return
 	}
 
@@ -53,7 +61,26 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler 
 	// only when perfect match not found, fallthrough here
 	// preprocess if currentPart is wildcard
 	// because wildcard need follow extra rules
-	if currentPart[0] == ':' || currentPart == "*" {
+	if currentPart[0] == '*' {
+		err := _ValidateAsteriskWildcard(currentPart, len(remainingParts))
+		if err != nil {
+			panic("invalid asterisk part '" + err.Error() + "' in pattern: " + fullPattern)
+		}
+
+		for _, child := range n.children {
+			if child.isWildcard &&
+				// rule: no two wildcards in one level
+				child.part != currentPart {
+				panic("conflicting wildcard routes: '" + child.part + "' vs '" + currentPart + "'")
+			}
+		}
+	}
+	if currentPart[0] == ':' {
+		err := _ValidateColonWildcard(currentPart)
+		if err != nil {
+			panic("invalid colon part '" + err.Error() + "' in pattern: " + fullPattern)
+		}
+
 		for _, child := range n.children {
 			if child.isWildcard &&
 				// rule: no two wildcards in one level
@@ -88,64 +115,140 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler 
 	}
 }
 
-// use recursion to find previously inserted node to handle request
-// with node itself and params resolved
-func (n *_RouteNode) _Find(parts []string, height int, params *map[string]string) *_RouteNode {
-	// end recursion when reaching target height
-	if len(parts) == height {
-		// if it is leaf node, return it
+// // use recursion to find previously inserted node to handle request
+// // with node itself and params resolved
+// func (n *_RouteNode) _Find(parts []string, height int, params *map[string]string) *_RouteNode {
+// 	// end recursion when reaching target height
+// 	if len(parts) == height {
+// 		// if it is leaf node, return it
+// 		if n.isLeaf {
+// 			return n
+// 		}
+// 		return nil
+// 	}
+
+// 	// get current part
+// 	part := parts[height]
+// 	children := n._MatchChildren(part)
+
+// 	for _, child := range children {
+// 		// save previous param state for backtracking
+// 		var oldValue string
+// 		var hasOld bool
+
+// 		// save param value
+// 		if child.part[0] == ':' {
+// 			paramKey := child.part[1:]
+// 			oldValue, hasOld = (*params)[paramKey]
+// 			(*params)[paramKey] = part
+// 		}
+
+// 		// then recurse to find
+// 		result := child._Find(parts, height+1, params)
+// 		if result != nil {
+// 			return result
+// 		}
+
+// 		// backtrace after dfs
+// 		if child.part[0] == ':' {
+// 			paramKey := child.part[1:]
+// 			if hasOld {
+// 				(*params)[paramKey] = oldValue
+// 			} else {
+// 				delete(*params, paramKey)
+// 			}
+// 		}
+
+// 		// specfically process asterisk
+// 		if child.part[0] == '*' {
+// 			if len(parts) >= height {
+// 				paramKey := strings.TrimPrefix(child.part, "*")
+// 				if paramKey == "" {
+// 					paramKey = "_"
+// 				}
+// 				(*params)[paramKey] = strings.Join(parts[height:], "/")
+// 				return child
+// 			}
+// 		}
+// 	}
+
+// 	// return nil when no mathcing node
+// 	return nil
+// }
+
+func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string]string) *_RouteNode {
+	// end recursion when matching all parts
+	if height == len(patternParts) {
 		if n.isLeaf {
+			slog.Debug(fmt.Sprintf("Leaf node matched: %v, params: %v",
+				n.pattern, *params))
 			return n
 		}
 		return nil
 	}
 
-	// get current part
-	part := parts[height]
-	children := n._MatchChildren(part)
+	currentPart := patternParts[height]
 
-	for _, child := range children {
-		// save previous param state for backtracking
-		var oldValue string
-		var hasOld bool
-
-		// save param value
-		if child.part[0] == ':' {
-			paramKey := child.part[1:]
-			oldValue, hasOld = (*params)[paramKey]
-			(*params)[paramKey] = part
+	// firstly try match exact node
+	for _, child := range n.children {
+		if child.isWildcard || child.part != currentPart {
+			continue
 		}
 
-		// then recurse to find
-		result := child._Find(parts, height+1, params)
-		if result != nil {
-			return result
-		}
-
-		// backtrace after dfs
-		if child.part[0] == ':' {
-			paramKey := child.part[1:]
-			if hasOld {
-				(*params)[paramKey] = oldValue
-			} else {
-				delete(*params, paramKey)
-			}
-		}
-
-		// specfically process asterisk
-		if child.part[0] == '*' {
-			if len(parts) >= height {
-				paramKey := strings.TrimPrefix(child.part, "*")
-				if paramKey == "" {
-					paramKey = "_"
-				}
-				(*params)[paramKey] = strings.Join(parts[height:], "/")
-				return child
-			}
+		found := child._Find(patternParts, height+1, params)
+		if found != nil {
+			return found
 		}
 	}
 
-	// return nil when no mathcing node
+	// if failed, try match wildcard node
+	for _, child := range n.children {
+		if !child.isWildcard {
+			continue
+		}
+
+		switch child.part[0] {
+		case ':':
+			// refuse empty string
+			if currentPart == "" {
+				slog.Debug("colon meets empty string")
+				continue
+			}
+
+			// before recursion, save current param value
+			paramKey := child.part[1:]
+			if params != nil {
+				(*params)[paramKey] = currentPart
+			}
+
+			found := child._Find(patternParts, height+1, params)
+			if found != nil {
+				return found
+			}
+
+			// if find failed, restore current param value
+			if params != nil {
+				delete(*params, paramKey)
+			}
+
+		case '*':
+			// asterisk param key name is default as "*"
+			paramKey := "*"
+			if len(child.part[1:]) > 0 {
+				paramKey = child.part[1:]
+			}
+
+			if params != nil {
+				// asterisk will match the rest part of the uri
+				(*params)[paramKey] = strings.Join(patternParts[height:], "/")
+			}
+
+			slog.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
+				child.pattern, *params))
+			return child
+		}
+	}
+
 	return nil
 }
 
@@ -232,7 +335,7 @@ func _ParseParts(pattern string) ([]string, error) {
 			}
 
 		case strings.HasPrefix(part, "*"):
-			if err := _ValidateAsteriskWildcard(part, i, len(parts)); err != nil {
+			if err := _ValidateAsteriskWildcard(part, len(parts)-i-1); err != nil {
 				return nil, fmt.Errorf("%w in: %s", err, pattern)
 			}
 			result = append(result, part)
@@ -255,7 +358,7 @@ func _ValidateColonWildcard(part string) error {
 		return errors.New("too many ':' in part: " + part)
 	}
 	// wildcard naming should be valid
-	if !_CheckWildcardNameValid(part[1:]) {
+	if !_CheckColonNameValid(strings.TrimPrefix(part, ":")) {
 		return errors.New("invalid wildcard name: " + part)
 	}
 
@@ -263,26 +366,38 @@ func _ValidateColonWildcard(part string) error {
 }
 
 // validate asterisk wildcard rules
-func _ValidateAsteriskWildcard(part string, partIndex, totalParts int) error {
+func _ValidateAsteriskWildcard(part string, remainingPartsNum int) error {
 	// make sure asterisk is last part
-	if partIndex != totalParts-1 {
+	if remainingPartsNum >= 1 {
 		return errors.New("asterisk must be last part")
 	}
 
 	// validate naming
 	name := strings.TrimPrefix(part, "*")
-	if name != "" && !_CheckWildcardNameValid(name) {
+	if !_CheckAsteriskNameValid(name) {
 		return errors.New("invalid asterisk name: " + name)
 	}
 
 	return nil
 }
 
-// check naming validation
-func _CheckWildcardNameValid(name string) bool {
+// check colon naming validation
+func _CheckColonNameValid(name string) bool {
 	if name == "" {
 		return false
 	}
+	for _, r := range name {
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			return false
+		}
+	}
+
+	// return true after checking
+	return true
+}
+
+// check asterisk naming validation
+func _CheckAsteriskNameValid(name string) bool {
 	for _, r := range name {
 		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
 			return false
