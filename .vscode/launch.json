@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Test",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/httpserver/httpserver_test.go",
+            "args": [
+                "-test.run",
+                "TestAddRoute"
+            ],
+            "env": {},
+            "showLog": true
+        }
+    ]
+}

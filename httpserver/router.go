@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"unicode"
 )
@@ -35,7 +36,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler 
 		n.isLeaf = true
 		n.handler = handler
 
-		slog.Info("Inserted route: " + fullPattern)
+		slog.Debug("Inserted route: " + fullPattern)
 
 		return
 	}
@@ -115,18 +116,19 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler 
 	}
 }
 
-func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string]string) *_RouteNode {
+func (n *_RouteNode) _Find(uriParts []string, height int, params *map[string]string) *_RouteNode {
 	// end recursion when matching all parts
-	if height == len(patternParts) {
+	if height == len(uriParts) {
 		if n.isLeaf {
 			slog.Debug(fmt.Sprintf("Leaf node matched: %v, params: %v",
 				n.pattern, *params))
 			return n
 		}
+		slog.Debug(fmt.Sprintf("No leaf node matched with: %v", uriParts))
 		return nil
 	}
 
-	currentPart := patternParts[height]
+	currentPart := uriParts[height]
 
 	// firstly try match exact node
 	for _, child := range n.children {
@@ -134,7 +136,7 @@ func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string
 			continue
 		}
 
-		found := child._Find(patternParts, height+1, params)
+		found := child._Find(uriParts, height+1, params)
 		if found != nil {
 			return found
 		}
@@ -160,7 +162,7 @@ func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string
 				(*params)[paramKey] = currentPart
 			}
 
-			found := child._Find(patternParts, height+1, params)
+			found := child._Find(uriParts, height+1, params)
 			if found != nil {
 				return found
 			}
@@ -179,7 +181,7 @@ func (n *_RouteNode) _Find(patternParts []string, height int, params *map[string
 
 			if params != nil {
 				// asterisk will match the rest part of the uri
-				(*params)[paramKey] = strings.Join(patternParts[height:], "/")
+				(*params)[paramKey] = strings.Join(uriParts[height:], "/")
 			}
 
 			slog.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
@@ -198,6 +200,11 @@ type _Router struct {
 	handlers map[string]HandlerFunc // references to handler
 }
 
+// implement http.Handler interface
+func (r *_Router) _ServeHttpImpl(w http.ResponseWriter, req *http.Request) {
+
+}
+
 // create a new router
 func _NewRouter() *_Router {
 	return &_Router{
@@ -208,6 +215,7 @@ func _NewRouter() *_Router {
 			children:   make([]*_RouteNode, 0),
 			handler:    nil,
 		},
+		handlers: make(map[string]HandlerFunc),
 	}
 }
 
@@ -224,7 +232,7 @@ func _ParseParts(pattern string) ([]string, error) {
 
 	for i, part := range parts {
 		// continue when part is empty
-		if part == "" {
+		if len(part) == 0 {
 			continue
 		}
 
@@ -287,6 +295,12 @@ func _CheckColonNameValid(name string) bool {
 	if name == "" {
 		return false
 	}
+
+	// first char must be letter or _
+	if !(unicode.IsLetter(rune(name[0])) || name[0] == '_') {
+		return false
+	}
+
 	for _, r := range name {
 		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
 			return false
@@ -299,6 +313,16 @@ func _CheckColonNameValid(name string) bool {
 
 // check asterisk naming validation
 func _CheckAsteriskNameValid(name string) bool {
+	// asterisk allows empty name
+	if name == "" {
+		return true
+	}
+
+	// first char must be letter or _
+	if !(unicode.IsLetter(rune(name[0])) || name[0] == '_') {
+		return false
+	}
+
 	for _, r := range name {
 		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
 			return false
@@ -310,34 +334,39 @@ func _CheckAsteriskNameValid(name string) bool {
 }
 
 func (r *_Router) _AddRoute(method Method, pattern string, handler HandlerFunc) {
-	if !CheckValidUri(pattern) {
-		slog.Warn("URI pattern format: " + pattern)
-		return
+	if !CheckValidPattern(pattern) {
+		// slog.Warn("URI pattern format: " + pattern)
+		// return
+		panic("URI pattern format: " + pattern)
 	}
 
-	// record handlers into router
-	key := method.String() + "-" + pattern
-	r.handlers[key] = handler
+	// process root route specially
+	if pattern == "/" {
+		r.root.handler = handler
+		r.root.pattern = pattern
+		r.root.isLeaf = true
+
+		key := method.String() + "-" + pattern
+		r.handlers[key] = handler
+
+		slog.Info(fmt.Sprintf("Added root in router: %s", pattern))
+
+		return
+	}
 
 	// splice route pattern into parts in order to insert into route tree
 	parts, err := _ParseParts(pattern)
 	if err != nil || len(parts) == 0 {
-		slog.Warn(fmt.Sprintf("Invalid route pattern: %s, error: %s", pattern, err.Error()))
-		return
+		//slog.Warn(fmt.Sprintf("Invalid route pattern: %s, error: %s", pattern, err.Error()))
+		//return
+		panic(err.Error())
 	}
 
-	// though root should not be nil after NewRouter function
-	// here make sure that root cannot be nil
-	if r.root == nil {
-		// root should be a virtual node
-		r.root = &_RouteNode{
-			pattern:    "",
-			part:       "",
-			isWildcard: false,
-			children:   make([]*_RouteNode, 0),
-			handler:    nil,
-		}
-	}
 	// insert into route tree
 	r.root._Insert(pattern, parts, handler)
+	// record handlers into router
+	key := method.String() + "-" + pattern
+	r.handlers[key] = handler
+
+	slog.Info(fmt.Sprintf("Added route in router: %s", pattern))
 }
