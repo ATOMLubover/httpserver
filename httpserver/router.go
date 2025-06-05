@@ -10,194 +10,11 @@ import (
 	"unicode"
 )
 
-// route tree node
-// implemented with Trie tree
-type _RouteNode struct {
-	pattern    string // entire route pattern
-	part       string // current route part
-	isWildcard bool   // is it a wildcard part
-	isLeaf     bool   // is it a leaf node
-
-	children []*_RouteNode // children nodes
-
-	handler HandlerFunc // corresponding handler
-}
-
-// insert route node
-func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, handler HandlerFunc) {
-	// n is parent actually, so just end the recursion and modify n
-	if len(patternParts) == 0 {
-		if n.handler != nil {
-			slog.Warn(fmt.Sprintf("Route '%s' already exists, overwriting...",
-				fullPattern))
-		}
-
-		n.pattern = fullPattern
-		n.isLeaf = true
-		n.handler = handler
-
-		slog.Debug("Inserted route: " + fullPattern)
-
-		return
-	}
-
-	currentPart := patternParts[0]
-	remainingParts := patternParts[1:]
-
-	// try match existing perfect matching nodes
-	// perfect match is priority
-	for _, child := range n.children {
-		// if find matching node, recurse on it
-		if child.part == currentPart {
-			// NOTICE that asterisk matching also needs an end
-			if currentPart == "*" && len(remainingParts) > 0 {
-				panic("wildcard can only be the last part")
-			}
-
-			child._Insert(fullPattern, remainingParts, handler)
-			return
-		}
-	}
-
-	// only when perfect match not found, fallthrough here
-	// preprocess if currentPart is wildcard
-	// because wildcard need follow extra rules
-	if currentPart[0] == '*' {
-		err := _ValidateAsteriskWildcard(currentPart, len(remainingParts))
-		if err != nil {
-			panic("invalid asterisk part '" + err.Error() + "' in pattern: " + fullPattern)
-		}
-
-		for _, child := range n.children {
-			if child.isWildcard &&
-				// rule: no two wildcards in one level
-				child.part != currentPart {
-				panic("conflicting wildcard routes: '" + child.part + "' vs '" + currentPart + "'")
-			}
-		}
-	}
-	if currentPart[0] == ':' {
-		err := _ValidateColonWildcard(currentPart)
-		if err != nil {
-			panic("invalid colon part '" + err.Error() + "' in pattern: " + fullPattern)
-		}
-
-		for _, child := range n.children {
-			if child.isWildcard &&
-				// rule: no two wildcards in one level
-				child.part != currentPart {
-				panic("conflicting wildcard routes: '" + child.part + "' vs '" + currentPart + "'")
-			}
-		}
-	}
-
-	// new exact currentPath and verified wildcard currentPath will come here
-	// create corresponding node
-	newNode := &_RouteNode{
-		part:       currentPart,
-		isWildcard: currentPart[0] == ':' || currentPart == "*",
-	}
-
-	// afterall, do not allow asterisk wildcard as a parent of another wildcard
-	if currentPart == "*" {
-		if len(remainingParts) > 0 {
-			panic("wildcard '*' must be the last part")
-		}
-		newNode.isLeaf = true
-		newNode.pattern = fullPattern
-		newNode.handler = handler
-	}
-
-	// grow the route tree
-	n.children = append(n.children, newNode)
-	// recurse to insert the remaining parts
-	if currentPart != "*" {
-		newNode._Insert(fullPattern, remainingParts, handler)
-	}
-}
-
-func (n *_RouteNode) _Find(uriParts []string, height int, params *map[string]string) *_RouteNode {
-	// end recursion when matching all parts
-	if height == len(uriParts) {
-		if n.isLeaf {
-			slog.Debug(fmt.Sprintf("Leaf node matched: %v, params: %v",
-				n.pattern, *params))
-			return n
-		}
-		slog.Debug(fmt.Sprintf("No leaf node matched with: %v", uriParts))
-		return nil
-	}
-
-	currentPart := uriParts[height]
-
-	// firstly try match exact node
-	for _, child := range n.children {
-		if child.isWildcard || child.part != currentPart {
-			continue
-		}
-
-		found := child._Find(uriParts, height+1, params)
-		if found != nil {
-			return found
-		}
-	}
-
-	// if failed, try match wildcard node
-	for _, child := range n.children {
-		if !child.isWildcard {
-			continue
-		}
-
-		switch child.part[0] {
-		case ':':
-			// refuse empty string
-			if currentPart == "" {
-				slog.Debug("colon meets empty string")
-				continue
-			}
-
-			// before recursion, save current param value
-			paramKey := child.part[1:]
-			if params != nil {
-				(*params)[paramKey] = currentPart
-			}
-
-			found := child._Find(uriParts, height+1, params)
-			if found != nil {
-				return found
-			}
-
-			// if find failed, restore current param value
-			if params != nil {
-				delete(*params, paramKey)
-			}
-
-		case '*':
-			// asterisk param key name is default as "*"
-			paramKey := "*"
-			if len(child.part[1:]) > 0 {
-				paramKey = child.part[1:]
-			}
-
-			if params != nil {
-				// asterisk will match the rest part of the uri
-				(*params)[paramKey] = strings.Join(uriParts[height:], "/")
-			}
-
-			slog.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
-				child.pattern, *params))
-			return child
-		}
-	}
-
-	return nil
-}
-
 // router controlls the all routes
 // and provides interfaces to register routes and handle requests
 type _Router struct {
-	root     *_RouteNode            // root node of route tree
-	handlers map[string]HandlerFunc // references to handler
+	routeTree *_RouteTree            // ref of route tree
+	handlers  map[string]HandlerFunc // references to handler
 }
 
 // implement http.Handler interface
@@ -208,52 +25,9 @@ func (r *_Router) _ServeHttpImpl(w http.ResponseWriter, req *http.Request) {
 // create a new router
 func _NewRouter() *_Router {
 	return &_Router{
-		root: &_RouteNode{
-			pattern:    "",
-			part:       "",
-			isWildcard: false,
-			children:   make([]*_RouteNode, 0),
-			handler:    nil,
-		},
-		handlers: make(map[string]HandlerFunc),
+		routeTree: _NewRouteTree(),
+		handlers:  make(map[string]HandlerFunc),
 	}
-}
-
-// transform a URI into pattern parts when setting route
-func _ParseParts(pattern string) ([]string, error) {
-	// trim slashes
-	trimmed := strings.Trim(pattern, "/")
-	if trimmed == "" {
-		return []string{}, nil // return empty slice when at root
-	}
-
-	parts := strings.Split(trimmed, "/")
-	result := make([]string, 0, len(parts))
-
-	for i, part := range parts {
-		// continue when part is empty
-		if len(part) == 0 {
-			continue
-		}
-
-		// check wildcard rules
-		switch {
-		case strings.HasPrefix(part, ":"):
-			if err := _ValidateColonWildcard(part); err != nil {
-				return nil, fmt.Errorf("%w in: %s", err, pattern)
-			}
-
-		case strings.HasPrefix(part, "*"):
-			if err := _ValidateAsteriskWildcard(part, len(parts)-i-1); err != nil {
-				return nil, fmt.Errorf("%w in: %s", err, pattern)
-			}
-			result = append(result, part)
-			return result, nil // return immidiately when reaching asterisk
-		}
-
-		result = append(result, part)
-	}
-	return result, nil
 }
 
 // validate colon wildcard rules
@@ -342,20 +116,20 @@ func (r *_Router) _AddRoute(method Method, pattern string, handler HandlerFunc) 
 
 	// process root route specially
 	if pattern == "/" {
-		r.root.handler = handler
-		r.root.pattern = pattern
-		r.root.isLeaf = true
+		r.routeTree.root.handlers[method] = handler
+		r.routeTree.root.pattern = pattern
+		r.routeTree.root.isLeaf = true
 
 		key := method.String() + "-" + pattern
 		r.handlers[key] = handler
 
-		slog.Info(fmt.Sprintf("Added root in router: %s", pattern))
+		slog.Info(fmt.Sprintf("Added root in router: %s, method: %s", pattern, method))
 
 		return
 	}
 
 	// splice route pattern into parts in order to insert into route tree
-	parts, err := _ParseParts(pattern)
+	parts, err := _TransformPatternIntoParts(pattern)
 	if err != nil || len(parts) == 0 {
 		//slog.Warn(fmt.Sprintf("Invalid route pattern: %s, error: %s", pattern, err.Error()))
 		//return
@@ -363,7 +137,7 @@ func (r *_Router) _AddRoute(method Method, pattern string, handler HandlerFunc) 
 	}
 
 	// insert into route tree
-	r.root._Insert(pattern, parts, handler)
+	r.routeTree._Insert(method, pattern, handler)
 	// record handlers into router
 	key := method.String() + "-" + pattern
 	r.handlers[key] = handler

@@ -43,7 +43,7 @@ type Context struct {
 // alias of functions
 type (
 	// handler function
-	HandlerFunc func(ctx Context)
+	HandlerFunc func(ctx *Context)
 
 	// middleware function
 	MiddlewareFunc func(next HandlerFunc) HandlerFunc

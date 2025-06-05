@@ -1,0 +1,203 @@
+package httpserver
+
+// route definations and Trie implementation for routing
+
+import (
+	"fmt"
+	"log/slog"
+	"strings"
+)
+
+// route tree node
+// implemented with Trie tree
+type _RouteNode struct {
+	pattern    string // entire route pattern
+	part       string // current route part
+	isWildcard bool   // is it a wildcard part
+	isLeaf     bool   // is it a leaf node
+
+	children []*_RouteNode // children nodes
+
+	handlers map[Method]HandlerFunc // corresponding handlers(key is method)
+}
+
+// Create a new route node
+func _NewRouteNode() *_RouteNode {
+	return &_RouteNode{
+		pattern:    "",
+		part:       "",
+		isWildcard: false,
+		isLeaf:     false,
+		children:   make([]*_RouteNode, 0),
+		handlers:   make(map[Method]HandlerFunc),
+	}
+}
+
+// insert node
+func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method Method, handler HandlerFunc) {
+	// n is parent actually, so just end the recursion and modify n
+	if len(patternParts) == 0 {
+		if n.handlers != nil && n.handlers[method] != nil {
+			slog.Warn(fmt.Sprintf("Route %s '%s' already exists, overwriting...",
+				method, fullPattern))
+		}
+
+		n.pattern = fullPattern
+		n.isLeaf = true
+		n.handlers[method] = handler
+
+		slog.Debug("Inserted route: " + fullPattern)
+
+		return
+	}
+
+	currentPart := patternParts[0]
+	remainingParts := patternParts[1:]
+
+	// try match existing perfect matching nodes
+	// perfect match is priority
+	for _, child := range n.children {
+		// if find matching node, recurse on it
+		if child.part == currentPart {
+			// NOTICE that asterisk matching also needs an end
+			if currentPart == "*" && len(remainingParts) > 0 {
+				panic("wildcard can only be the last part")
+			}
+
+			child._Insert(fullPattern, remainingParts, method, handler)
+			return
+		}
+	}
+
+	// only when perfect match not found, fallthrough here
+	// preprocess if currentPart is wildcard
+	// because wildcard need follow extra rules
+	if currentPart[0] == '*' {
+		err := _ValidateAsteriskWildcard(currentPart, len(remainingParts))
+		if err != nil {
+			panic("invalid asterisk part '" + err.Error() + "' in pattern: " + fullPattern)
+		}
+
+		for _, child := range n.children {
+			if child.isWildcard &&
+				// rule: no two wildcards in one level
+				child.part != currentPart {
+				panic("conflicting wildcard routes: '" + child.part + "' vs '" + currentPart + "'")
+			}
+		}
+	}
+	if currentPart[0] == ':' {
+		err := _ValidateColonWildcard(currentPart)
+		if err != nil {
+			panic("invalid colon part '" + err.Error() + "' in pattern: " + fullPattern)
+		}
+
+		for _, child := range n.children {
+			if child.isWildcard &&
+				// rule: no two wildcards in one level
+				child.part != currentPart {
+				panic("conflicting wildcard routes: '" + child.part + "' vs '" + currentPart + "'")
+			}
+		}
+	}
+
+	// new exact currentPath and verified wildcard currentPath will come here
+	// create corresponding node
+	newNode := _NewRouteNode()
+	newNode.part = currentPart
+	newNode.isWildcard = currentPart[0] == ':' || currentPart == "*"
+
+	// afterall, do not allow asterisk wildcard as a parent of another wildcard
+	if currentPart == "*" {
+		if len(remainingParts) > 0 {
+			panic("wildcard '*' must be the last part")
+		}
+		newNode.isLeaf = true
+		newNode.pattern = fullPattern
+		newNode.handlers[method] = handler
+	}
+
+	// grow the route tree
+	n.children = append(n.children, newNode)
+	// recurse to insert the remaining parts
+	if currentPart != "*" {
+		newNode._Insert(fullPattern, remainingParts, method, handler)
+	}
+}
+
+func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params *map[string]string) *_RouteNode {
+	// end recursion when matching all parts
+	if height == len(uriParts) {
+		if n.isLeaf {
+			slog.Debug(fmt.Sprintf("Leaf node matched: %v, method: %s, params: %v",
+				n.pattern, method, *params))
+			return n
+		}
+		slog.Debug(fmt.Sprintf("No leaf node matched with: %v, method: %s", uriParts, method))
+		return nil
+	}
+
+	currentPart := uriParts[height]
+
+	// firstly try match exact node
+	for _, child := range n.children {
+		if child.isWildcard || child.part != currentPart {
+			continue
+		}
+
+		found := child._Find(uriParts, height+1, method, params)
+		if found != nil {
+			return found
+		}
+	}
+
+	// if failed, try match wildcard node
+	for _, child := range n.children {
+		if !child.isWildcard {
+			continue
+		}
+
+		switch child.part[0] {
+		case ':':
+			// refuse empty string
+			if currentPart == "" {
+				slog.Debug("colon meets empty string")
+				continue
+			}
+
+			// before recursion, save current param value
+			paramKey := child.part[1:]
+			if params != nil {
+				(*params)[paramKey] = currentPart
+			}
+
+			found := child._Find(uriParts, height+1, method, params)
+			if found != nil {
+				return found
+			}
+
+			// if find failed, restore current param value
+			if params != nil {
+				delete(*params, paramKey)
+			}
+
+		case '*':
+			// asterisk param key name is default as "*"
+			paramKey := "*"
+			if len(child.part[1:]) > 0 {
+				paramKey = child.part[1:]
+			}
+
+			if params != nil {
+				// asterisk will match the rest part of the uri
+				(*params)[paramKey] = strings.Join(uriParts[height:], "/")
+			}
+
+			slog.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
+				child.pattern, *params))
+			return child
+		}
+	}
+
+	return nil
+}
