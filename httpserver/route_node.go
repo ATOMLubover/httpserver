@@ -1,15 +1,12 @@
 package httpserver
 
-// route definations and Trie implementation for routing
-
 import (
 	"fmt"
 	"log/slog"
 	"strings"
 )
 
-// route tree node
-// implemented with Trie tree
+// Route tree node.
 type _RouteNode struct {
 	pattern    string // entire route pattern
 	part       string // current route part
@@ -33,7 +30,7 @@ func _NewRouteNode() *_RouteNode {
 	}
 }
 
-// insert node
+// Insert node by recursion
 func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method Method, handler HandlerFunc) {
 	// n is parent actually, so just end the recursion and modify n
 	if len(patternParts) == 0 {
@@ -125,6 +122,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method M
 	}
 }
 
+// Find node by recursion
 func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params *map[string]string) *_RouteNode {
 	// end recursion when matching all parts
 	if height == len(uriParts) {

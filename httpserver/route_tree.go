@@ -5,19 +5,19 @@ import (
 	"log/slog"
 )
 
-// route tree implemented with Trie
+// Route tree implemented with Trie.
 type _RouteTree struct {
 	root *_RouteNode // ref of root node of route tree
 }
 
-// Create a new route tree
+// Create a new route tree.
 func _NewRouteTree() *_RouteTree {
 	return &_RouteTree{
 		root: _NewRouteNode(),
 	}
 }
 
-// insert route node
+// Insert route into route tree.
 func (t *_RouteTree) _Insert(method Method, pattern string, handler HandlerFunc) {
 	// parse pattern
 	patternParts, err := _TransformPatternIntoParts(pattern)
@@ -29,7 +29,7 @@ func (t *_RouteTree) _Insert(method Method, pattern string, handler HandlerFunc)
 	t.root._Insert(pattern, patternParts, method, handler)
 }
 
-// try searching a matching route node, return nil if not found or uri is invalid
+// Try searching a matching route node, return nil if not found or uri is invalid.
 func (t *_RouteTree) _Search(uri string, method Method) *_RouteNode {
 	uriParts, err := _TransformUriIntoParts(uri)
 	if err != nil {

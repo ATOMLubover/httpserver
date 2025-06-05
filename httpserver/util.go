@@ -2,17 +2,96 @@
 package httpserver
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
-func CheckValidPattern(uri string) bool {
-	pattern := `^[a-zA-Z0-9_/:*]+$`
-	matched, _ := regexp.MatchString(pattern, uri)
-	return matched
+func _CheckPatternCharactors(pattern string) bool {
+	regexPattern := `^[a-zA-Z0-9_/:*]+$`
+	matched, err := regexp.MatchString(regexPattern, pattern)
+	return (err != nil) || matched
+}
+
+// validate colon wildcard rules
+func _ValidateColonWildcard(part string) error {
+	// format should be like ":name"
+	if len(part) == 1 {
+		return errors.New("colon wildcard must be named")
+	}
+	// colon should not be repeated
+	if strings.Count(part, ":") > 1 {
+		return errors.New("too many ':' in part: " + part)
+	}
+	// wildcard naming should be valid
+	if !_CheckColonNameValid(strings.TrimPrefix(part, ":")) {
+		return errors.New("invalid wildcard name: " + part)
+	}
+
+	return nil
+}
+
+// validate asterisk wildcard rules
+func _ValidateAsteriskWildcard(part string, remainingPartsNum int) error {
+	// make sure asterisk is last part
+	if remainingPartsNum >= 1 {
+		return errors.New("asterisk must be last part")
+	}
+
+	// validate naming
+	name := strings.TrimPrefix(part, "*")
+	if !_CheckAsteriskNameValid(name) {
+		return errors.New("invalid asterisk name: " + name)
+	}
+
+	return nil
+}
+
+// check colon naming validation
+func _CheckColonNameValid(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	// first char must be letter or _
+	if !(unicode.IsLetter(rune(name[0])) || name[0] == '_') {
+		return false
+	}
+
+	for _, r := range name {
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			return false
+		}
+	}
+
+	// return true after checking
+	return true
+}
+
+// check asterisk naming validation
+func _CheckAsteriskNameValid(name string) bool {
+	// asterisk allows empty name
+	if name == "" {
+		return true
+	}
+
+	// first char must be letter or _
+	if !(unicode.IsLetter(rune(name[0])) || name[0] == '_') {
+		return false
+	}
+
+	for _, r := range name {
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			return false
+		}
+	}
+
+	// return true after checking
+	return true
 }
 
 // transform a pattern into valid parts when setting route

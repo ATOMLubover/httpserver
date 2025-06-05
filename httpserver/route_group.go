@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-// route group
+// Route group
 type RouteGroup struct {
 	routeTree *_RouteTree // ref of route tree, but is just a ref for insert and find
 
@@ -15,8 +15,7 @@ type RouteGroup struct {
 	middlewares []MiddlewareFunc // shared middlewares
 }
 
-// create a new route group, with middleware slice empty.
-// not exposed to public
+// Create a new route group.
 func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
 	// check the format of prefix
 	{
@@ -28,7 +27,7 @@ func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
 			panic("prefix should not contain '*' wildcard: " + prefix)
 		}
 
-		if !CheckValidPattern(prefix) {
+		if !_CheckPatternCharactors(prefix) {
 			panic("pattern including invalid charactors: " + prefix)
 		}
 
@@ -48,7 +47,7 @@ func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
 		children: make([]*RouteGroup, 0),
 
 		prefix:      prefix,
-		middlewares: parent.middlewares, // inherit middlewares of parent
+		middlewares: make([]MiddlewareFunc, 0), // inherit middlewares of parent runtime
 	}
 }
 
@@ -62,12 +61,7 @@ func (g *RouteGroup) AddRoute(method Method, pattern string, handler HandlerFunc
 
 	// add prefix to pattern
 	// remove the last '/' of prefix
-	pattern = g.prefix[:len(pattern)-1] + pattern
-
-	// add middlewares to handler
-	for i := len(g.middlewares) - 1; i >= 0; i-- {
-		handler = g.middlewares[i](handler)
-	}
+	pattern = g.prefix[:len(g.prefix)-1] + pattern
 
 	// insert route node
 	g.routeTree._Insert(method, pattern, handler)
@@ -75,7 +69,7 @@ func (g *RouteGroup) AddRoute(method Method, pattern string, handler HandlerFunc
 
 // Add a new child route group into this route group.
 // Return the child route group newly created.
-func (g *RouteGroup) AddSubGroup(prefix string) *RouteGroup {
+func (g *RouteGroup) AddGroup(prefix string) *RouteGroup {
 	// remove the last '/'
 	parentPrefix := g.prefix[:len(g.prefix)-1]
 	// create child route group
@@ -87,9 +81,9 @@ func (g *RouteGroup) AddSubGroup(prefix string) *RouteGroup {
 	return child
 }
 
-// Use new middleware into this route group.
+// UseMiddleware new middleware into this route group.
 // Order of this function decides the order of middleware being applied,
-// Use firstly will be applied firstly.
+// UseMiddleware firstly will be applied firstly.
 func (g *RouteGroup) UseMiddleware(middleware MiddlewareFunc) {
 	g.middlewares = append(g.middlewares, middleware)
 }
