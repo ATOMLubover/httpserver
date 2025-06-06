@@ -88,8 +88,3 @@ func (r *_Router) AddGroup(prefix string) *RouteGroup {
 func (r *_Router) UseMiddleware(middleware MiddlewareFunc) {
 	r.middlewares = append(r.middlewares, middleware)
 }
-
-// Handle request.
-func (r *_Router) Handle(w http.ResponseWriter, req *http.Request) {
-	
-}

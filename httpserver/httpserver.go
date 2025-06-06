@@ -23,23 +23,6 @@ func (m Method) String() string {
 	return methodToString[m]
 }
 
-// http request
-type Request struct {
-	Method Method
-	Url    string
-	Uri    string
-}
-
-// http response
-type Response struct {
-}
-
-// http context
-type Context struct {
-	Request  Request
-	Response Response
-}
-
 // alias of functions
 type (
 	// handler function
