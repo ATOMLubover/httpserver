@@ -1,0 +1,42 @@
+# normal binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# test binaries
+*.test
+
+# build dir
+/bin/
+/dist/
+/out/
+
+# dependence controls
+/vendor/
+
+# go module cache
+/go/pkg/
+
+# Go test coverage 
+*.out
+coverage.html
+coverage.txt
+
+# development env
+.env
+.env.local
+
+# IDE configs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS shit
+.DS_Store
+Thumbs.db
+
+# auto updated files
+/go.sum 

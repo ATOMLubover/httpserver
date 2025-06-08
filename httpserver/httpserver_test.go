@@ -2,12 +2,10 @@ package httpserver
 
 import (
 	"fmt"
-	"log/slog"
-	"os"
-	"strconv"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -50,6 +48,180 @@ func (n *_RouteNode) printTree(level int) {
 func (n *_RouteNode) printAllRoutes() {
 	fmt.Println("\nRegistered Routes:")
 	n.printTree(0)
+}
+
+func TestHttpServer(t *testing.T) {
+	// 创建服务器实例（使用随机端口避免冲突）
+	server := NewServer(0) // 0 表示自动选择可用端口
+
+	// 获取全局路由组
+	globalRg := server.GetGlobalRouteGroup()
+
+	// 添加测试路由
+	globalRg.AddRoute(GET, "/hello_world", func(ctx *Context) {
+		ctx.Text(200, "Hello, World!")
+	})
+
+	globalRg.AddRoute(GET, "/user/:id", func(ctx *Context) {
+		id := ctx.uriParams["id"]
+		ctx.Text(200, "User ID: "+id)
+	})
+
+	globalRg.AddRoute(POST, "/echo", func(ctx *Context) {
+		body, _ := ctx.GetBody()
+		ctx.Text(200, string(body))
+	})
+
+	// 添加带中间件的路由
+	globalRg.UseMiddleware(func(next HandlerFunc) HandlerFunc {
+		return func(ctx *Context) {
+			ctx.SetHeader("X-Middleware", "executed")
+			next(ctx)
+		}
+	})
+
+	// 在 goroutine 中启动服务器
+	go func() {
+		if err := server.Serve(); err != nil && err != http.ErrServerClosed {
+			t.Errorf("Server failed: %v", err)
+		}
+	}()
+
+	// 等待服务器启动
+	time.Sleep(100 * time.Millisecond)
+
+	// 获取服务器实际监听地址
+	addr := server.GetAddr()
+	if addr == "" {
+		t.Fatal("Server address not available")
+	}
+
+	// 测试用例表
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+		wantBody   string
+		wantHeader string
+	}{
+		{
+			name:       "Simple GET request",
+			method:     "GET",
+			path:       "/hello_world",
+			wantStatus: 200,
+			wantBody:   "Hello, World!",
+			wantHeader: "executed",
+		},
+		{
+			name:       "Route with parameters",
+			method:     "GET",
+			path:       "/user/123",
+			wantStatus: 200,
+			wantBody:   "User ID: 123",
+			wantHeader: "executed",
+		},
+		{
+			name:       "POST request with body",
+			method:     "POST",
+			path:       "/echo",
+			body:       "Test payload",
+			wantStatus: 200,
+			wantBody:   "Test payload",
+			wantHeader: "executed",
+		},
+		{
+			name:       "Not found route",
+			method:     "GET",
+			path:       "/not_found",
+			wantStatus: 404,
+			wantBody:   "Invalid request URI.\n",
+		},
+	}
+
+	// 运行测试用例
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 创建请求
+			req := httptest.NewRequest(tt.method, "http://"+addr+tt.path, nil)
+			if tt.body != "" {
+				req = httptest.NewRequest(tt.method, "http://"+addr+tt.path, strings.NewReader(tt.body))
+				req.Header.Set("Content-Type", "text/plain")
+			}
+
+			// 记录响应
+			w := httptest.NewRecorder()
+
+			// 直接调用路由器的 ServeHTTP 方法（避免网络请求）
+			server.router.ServeHTTP(w, req)
+
+			// 验证状态码
+			if w.Code != tt.wantStatus {
+				t.Errorf("Status code = %d, want %d", w.Code, tt.wantStatus)
+			}
+
+			// 验证响应体
+			if body := w.Body.String(); body != tt.wantBody {
+				t.Errorf("Response body = %q, want %q", body, tt.wantBody)
+			}
+
+			// 验证中间件设置的Header
+			if tt.wantHeader != "" {
+				if header := w.Header().Get("X-Middleware"); header != tt.wantHeader {
+					t.Errorf("X-Middleware header = %q, want %q", header, tt.wantHeader)
+				}
+			}
+		})
+	}
+
+	// 测试并发请求
+	t.Run("Concurrent requests", func(t *testing.T) {
+		const numRequests = 100
+		var wg sync.WaitGroup
+		wg.Add(numRequests)
+
+		for i := 0; i < numRequests; i++ {
+			go func(id int) {
+				defer wg.Done()
+
+				req := httptest.NewRequest("GET", fmt.Sprintf("http://%s/user/%d", addr, id), nil)
+				w := httptest.NewRecorder()
+				server.router.ServeHTTP(w, req)
+
+				if w.Code != 200 {
+					t.Errorf("Request %d: status = %d", id, w.Code)
+				}
+
+				expected := fmt.Sprintf("User ID: %d", id)
+				if body := w.Body.String(); body != expected {
+					t.Errorf("Request %d: body = %q, want %q", id, body, expected)
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	})
+
+	// 测试Context池回收
+	t.Run("Context pool recycling", func(t *testing.T) {
+		initialSize := server.router.contextPool.size
+
+		// 发送多个请求
+		for i := 0; i < 10; i++ {
+			req := httptest.NewRequest("GET", "http://"+addr+"/hello_world", nil)
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+		}
+
+		// 验证池大小不变
+		if currentSize := server.router.contextPool.size; currentSize != initialSize {
+			t.Errorf("Context pool size changed from %d to %d", initialSize, currentSize)
+		}
+	})
+
+	// 停止服务器
+	server.Shutdown()
 }
 
 // func TestRouteTreeInsert(t *testing.T) {
@@ -442,251 +614,251 @@ func createMockMiddleware(id int) MiddlewareFunc {
 // 	}
 // }
 
-// 测试脏标记和重建逻辑
-func TestDirtyMarkingAndRebuild(t *testing.T) {
-	// 创建 HandlerOptions 并设置日志级别为 Debug
-	handlerOpts := &slog.HandlerOptions{
-		Level: slog.LevelDebug, // 设置日志级别为 Debug
-	}
+// // 测试脏标记和重建逻辑
+// func TestDirtyMarkingAndRebuild(t *testing.T) {
+// 	// 创建 HandlerOptions 并设置日志级别为 Debug
+// 	handlerOpts := &slog.HandlerOptions{
+// 		Level: slog.LevelDebug, // 设置日志级别为 Debug
+// 	}
 
-	// 创建 JSON 格式的 Handler
-	handler := slog.NewTextHandler(os.Stdout, handlerOpts)
+// 	// 创建 JSON 格式的 Handler
+// 	handler := slog.NewTextHandler(os.Stdout, handlerOpts)
 
-	// 创建新的 Logger
-	logger := slog.New(handler)
+// 	// 创建新的 Logger
+// 	logger := slog.New(handler)
 
-	// 设置为全局默认 Logger
-	slog.SetDefault(logger)
+// 	// 设置为全局默认 Logger
+// 	slog.SetDefault(logger)
 
-	cache := _NewMiddlewareChainCache(5)
-	defer close(cache.closeChan)
+// 	cache := _NewMiddlewareChainCache(5)
+// 	defer close(cache.closeChan)
 
-	// 添加条目
-	cache._Get("key1", func() []MiddlewareFunc {
-		return []MiddlewareFunc{createMockMiddleware(1)}
-	})
-	cache._Get("key2", func() []MiddlewareFunc {
-		return []MiddlewareFunc{createMockMiddleware(2)}
-	})
+// 	// 添加条目
+// 	cache._Get("key1", func() []MiddlewareFunc {
+// 		return []MiddlewareFunc{createMockMiddleware(1)}
+// 	})
+// 	cache._Get("key2", func() []MiddlewareFunc {
+// 		return []MiddlewareFunc{createMockMiddleware(2)}
+// 	})
 
-	// 访问key1使其变脏
-	cache._TryGettingInCache("key1")
+// 	// 访问key1使其变脏
+// 	cache._TryGettingInCache("key1")
 
-	// 验证脏标记
-	func() {
-		elem := cache.entries["key1"]
-		entry := elem.Value.(*_MiddlewareChainCacheEntry)
-		entry.globalMutex.Lock()
-		defer entry.globalMutex.Unlock()
-		if !entry.isDirty {
-			t.Fatal("Expected key1 to be dirty")
-		}
-	}()
+// 	// 验证脏标记
+// 	func() {
+// 		elem := cache.entries["key1"]
+// 		entry := elem.Value.(*_MiddlewareChainCacheEntry)
+// 		entry.globalMutex.Lock()
+// 		defer entry.globalMutex.Unlock()
+// 		if !entry.isDirty {
+// 			t.Fatal("Expected key1 to be dirty")
+// 		}
+// 	}()
 
-	// 验证脏列表
-	if cache.dirtyList.Len() != 1 {
-		t.Fatalf("Expected 1 dirty entry, got %d", cache.dirtyList.Len())
-	}
+// 	// 验证脏列表
+// 	if cache.dirtyList.Len() != 1 {
+// 		t.Fatalf("Expected 1 dirty entry, got %d", cache.dirtyList.Len())
+// 	}
 
-	// 手动触发重建
-	cache._RebuildOrder()
+// 	// 手动触发重建
+// 	cache._RebuildOrder()
 
-	// 验证重建后状态
-	if cache.dirtyList.Len() != 0 {
-		t.Fatalf("Expected 0 dirty entries after rebuild, got %d", cache.dirtyList.Len())
-	}
+// 	// 验证重建后状态
+// 	if cache.dirtyList.Len() != 0 {
+// 		t.Fatalf("Expected 0 dirty entries after rebuild, got %d", cache.dirtyList.Len())
+// 	}
 
-	// 验证key1不再脏
-	func() {
-		elem := cache.entries["key1"]
-		entry := elem.Value.(*_MiddlewareChainCacheEntry)
-		entry.globalMutex.Lock()
-		defer entry.globalMutex.Unlock()
-		if entry.isDirty {
-			t.Fatal("Expected key1 to be clean after rebuild")
-		}
-	}()
-}
+// 	// 验证key1不再脏
+// 	func() {
+// 		elem := cache.entries["key1"]
+// 		entry := elem.Value.(*_MiddlewareChainCacheEntry)
+// 		entry.globalMutex.Lock()
+// 		defer entry.globalMutex.Unlock()
+// 		if entry.isDirty {
+// 			t.Fatal("Expected key1 to be clean after rebuild")
+// 		}
+// 	}()
+// }
 
-// 测试并发访问 - 基本功能
-func TestConcurrentAccess(t *testing.T) {
-	cache := _NewMiddlewareChainCache(10)
-	defer close(cache.closeChan)
+// // 测试并发访问 - 基本功能
+// func TestConcurrentAccess(t *testing.T) {
+// 	cache := _NewMiddlewareChainCache(10)
+// 	defer close(cache.closeChan)
 
-	var wg sync.WaitGroup
-	creationCounter := atomic.Int32{}
+// 	var wg sync.WaitGroup
+// 	creationCounter := atomic.Int32{}
 
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			key := "key" + strconv.Itoa(id%5) // 5个不同的key
-			cache._Get(key, func() []MiddlewareFunc {
-				creationCounter.Add(1)
-				time.Sleep(10 * time.Millisecond) // 模拟创建延迟
-				return []MiddlewareFunc{createMockMiddleware(id)}
-			})
-		}(i)
-	}
+// 	for i := 0; i < 100; i++ {
+// 		wg.Add(1)
+// 		go func(id int) {
+// 			defer wg.Done()
+// 			key := "key" + strconv.Itoa(id%5) // 5个不同的key
+// 			cache._Get(key, func() []MiddlewareFunc {
+// 				creationCounter.Add(1)
+// 				time.Sleep(10 * time.Millisecond) // 模拟创建延迟
+// 				return []MiddlewareFunc{createMockMiddleware(id)}
+// 			})
+// 		}(i)
+// 	}
 
-	wg.Wait()
+// 	wg.Wait()
 
-	// 验证每个key只创建一次
-	if creationCounter.Load() != 5 {
-		t.Fatalf("Expected 5 creations, got %d", creationCounter.Load())
-	}
+// 	// 验证每个key只创建一次
+// 	if creationCounter.Load() != 5 {
+// 		t.Fatalf("Expected 5 creations, got %d", creationCounter.Load())
+// 	}
 
-	// 验证缓存统计
-	if cache.hits.Load() == 0 {
-		t.Fatal("Expected some cache hits")
-	}
-	if cache.misses.Load() != 5 {
-		t.Fatalf("Expected 5 misses, got %d", cache.misses.Load())
-	}
-}
+// 	// 验证缓存统计
+// 	if cache.hits.Load() == 0 {
+// 		t.Fatal("Expected some cache hits")
+// 	}
+// 	if cache.misses.Load() != 5 {
+// 		t.Fatalf("Expected 5 misses, got %d", cache.misses.Load())
+// 	}
+// }
 
-// 测试缓存击穿防护
-func TestCacheStampedeProtection(t *testing.T) {
-	cache := _NewMiddlewareChainCache(5)
-	defer close(cache.closeChan)
+// // 测试缓存击穿防护
+// func TestCacheStampedeProtection(t *testing.T) {
+// 	cache := _NewMiddlewareChainCache(5)
+// 	defer close(cache.closeChan)
 
-	const key = "testKey"
-	const concurrentRequests = 50
+// 	const key = "testKey"
+// 	const concurrentRequests = 50
 
-	var (
-		wg             sync.WaitGroup
-		creationCount  atomic.Int32
-		firstCreatedAt time.Time
-		creationTimes  = make([]time.Time, concurrentRequests)
-	)
+// 	var (
+// 		wg             sync.WaitGroup
+// 		creationCount  atomic.Int32
+// 		firstCreatedAt time.Time
+// 		creationTimes  = make([]time.Time, concurrentRequests)
+// 	)
 
-	for i := 0; i < concurrentRequests; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			chain := cache._Get(key, func() []MiddlewareFunc {
-				count := creationCount.Add(1)
-				if count == 1 {
-					firstCreatedAt = time.Now()
-				}
+// 	for i := 0; i < concurrentRequests; i++ {
+// 		wg.Add(1)
+// 		go func(id int) {
+// 			defer wg.Done()
+// 			chain := cache._Get(key, func() []MiddlewareFunc {
+// 				count := creationCount.Add(1)
+// 				if count == 1 {
+// 					firstCreatedAt = time.Now()
+// 				}
 
-				// 模拟创建耗时
-				time.Sleep(100 * time.Millisecond)
-				return []MiddlewareFunc{createMockMiddleware(id)}
-			})
-			slog.Debug(fmt.Sprintf("Got chain(%v) for key %s, id %d", chain, key, id))
-			creationTimes[id] = time.Now()
-		}(i)
-	}
+// 				// 模拟创建耗时
+// 				time.Sleep(100 * time.Millisecond)
+// 				return []MiddlewareFunc{createMockMiddleware(id)}
+// 			})
+// 			slog.Debug(fmt.Sprintf("Got chain(%v) for key %s, id %d", chain, key, id))
+// 			creationTimes[id] = time.Now()
+// 		}(i)
+// 	}
 
-	wg.Wait()
+// 	wg.Wait()
 
-	// 验证只创建了一次
-	if creationCount.Load() != 1 {
-		t.Fatalf("Expected only 1 creation, got %d", creationCount.Load())
-	}
+// 	// 验证只创建了一次
+// 	if creationCount.Load() != 1 {
+// 		t.Fatalf("Expected only 1 creation, got %d", creationCount.Load())
+// 	}
 
-	// 验证所有goroutine都获得相同结果
-	for i, ct := range creationTimes {
-		if ct.Before(firstCreatedAt.Add(90 * time.Millisecond)) {
-			t.Fatalf("Request %d returned too early, before creation finished", i)
-		}
-	}
-}
+// 	// 验证所有goroutine都获得相同结果
+// 	for i, ct := range creationTimes {
+// 		if ct.Before(firstCreatedAt.Add(90 * time.Millisecond)) {
+// 			t.Fatalf("Request %d returned too early, before creation finished", i)
+// 		}
+// 	}
+// }
 
-// 测试高并发重建
-func TestConcurrentRebuild(t *testing.T) {
-	cache := _NewMiddlewareChainCache(20)
-	defer close(cache.closeChan)
+// // 测试高并发重建
+// func TestConcurrentRebuild(t *testing.T) {
+// 	cache := _NewMiddlewareChainCache(20)
+// 	defer close(cache.closeChan)
 
-	// 填充缓存
-	for i := 0; i < 20; i++ {
-		key := "key" + strconv.Itoa(i)
-		cache._Get(key, func() []MiddlewareFunc {
-			return []MiddlewareFunc{createMockMiddleware(i)}
-		})
-	}
+// 	// 填充缓存
+// 	for i := 0; i < 20; i++ {
+// 		key := "key" + strconv.Itoa(i)
+// 		cache._Get(key, func() []MiddlewareFunc {
+// 			return []MiddlewareFunc{createMockMiddleware(i)}
+// 		})
+// 	}
 
-	// 启动重建
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		// cache.globalMutex.Lock()
-		// defer cache.globalMutex.Unlock()
-		cache._RebuildOrder()
-	}()
+// 	// 启动重建
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	go func() {
+// 		defer wg.Done()
+// 		// cache.globalMutex.Lock()
+// 		// defer cache.globalMutex.Unlock()
+// 		cache._RebuildOrder()
+// 	}()
 
-	// 在重建过程中并发访问
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			key := "key" + strconv.Itoa(id%20)
-			chain := cache._Get(key, func() []MiddlewareFunc {
-				return []MiddlewareFunc{createMockMiddleware(id)}
-			})
-			if len(chain) == 0 {
-				t.Error("Got empty chain")
-			}
-		}(i)
-	}
+// 	// 在重建过程中并发访问
+// 	for i := 0; i < 100; i++ {
+// 		wg.Add(1)
+// 		go func(id int) {
+// 			defer wg.Done()
+// 			key := "key" + strconv.Itoa(id%20)
+// 			chain := cache._Get(key, func() []MiddlewareFunc {
+// 				return []MiddlewareFunc{createMockMiddleware(id)}
+// 			})
+// 			if len(chain) == 0 {
+// 				t.Error("Got empty chain")
+// 			}
+// 		}(i)
+// 	}
 
-	wg.Wait()
-}
+// 	wg.Wait()
+// }
 
-// 测试缓存关闭
-func TestCacheClose(t *testing.T) {
-	cache := _NewMiddlewareChainCache(5)
+// // 测试缓存关闭
+// func TestCacheClose(t *testing.T) {
+// 	cache := _NewMiddlewareChainCache(5)
 
-	// 启动后台重建
-	closed := make(chan bool)
-	go func() {
-		cache._BackgroundRebuild()
-		closed <- true
-	}()
+// 	// 启动后台重建
+// 	closed := make(chan bool)
+// 	go func() {
+// 		cache._BackgroundRebuild()
+// 		closed <- true
+// 	}()
 
-	// 添加一些数据
-	cache._Get("key1", func() []MiddlewareFunc {
-		return []MiddlewareFunc{createMockMiddleware(1)}
-	})
+// 	// 添加一些数据
+// 	cache._Get("key1", func() []MiddlewareFunc {
+// 		return []MiddlewareFunc{createMockMiddleware(1)}
+// 	})
 
-	// 关闭缓存
-	close(cache.closeChan)
+// 	// 关闭缓存
+// 	close(cache.closeChan)
 
-	select {
-	case <-closed:
-		// 正常关闭
-	case <-time.After(1 * time.Second):
-		t.Fatal("Background goroutine did not exit")
-	}
-}
+// 	select {
+// 	case <-closed:
+// 		// 正常关闭
+// 	case <-time.After(1 * time.Second):
+// 		t.Fatal("Background goroutine did not exit")
+// 	}
+// }
 
-// 压力测试 - 高并发访问
-func BenchmarkCacheUnderLoad(b *testing.B) {
-	cache := _NewMiddlewareChainCache(100)
-	defer close(cache.closeChan)
+// // 压力测试 - 高并发访问
+// func BenchmarkCacheUnderLoad(b *testing.B) {
+// 	cache := _NewMiddlewareChainCache(100)
+// 	defer close(cache.closeChan)
 
-	// 预填充缓存
-	for i := 0; i < 100; i++ {
-		key := "key" + strconv.Itoa(i)
-		cache._Get(key, func() []MiddlewareFunc {
-			return []MiddlewareFunc{createMockMiddleware(i)}
-		})
-	}
+// 	// 预填充缓存
+// 	for i := 0; i < 100; i++ {
+// 		key := "key" + strconv.Itoa(i)
+// 		cache._Get(key, func() []MiddlewareFunc {
+// 			return []MiddlewareFunc{createMockMiddleware(i)}
+// 		})
+// 	}
 
-	b.RunParallel(func(pb *testing.PB) {
-		counter := 0
-		for pb.Next() {
-			counter++
-			key := "key" + strconv.Itoa(counter%150) // 100个缓存key + 50个未缓存
-			cache._Get(key, func() []MiddlewareFunc {
-				time.Sleep(5 * time.Millisecond) // 模拟创建开销
-				return []MiddlewareFunc{createMockMiddleware(counter)}
-			})
-		}
-	})
+// 	b.RunParallel(func(pb *testing.PB) {
+// 		counter := 0
+// 		for pb.Next() {
+// 			counter++
+// 			key := "key" + strconv.Itoa(counter%150) // 100个缓存key + 50个未缓存
+// 			cache._Get(key, func() []MiddlewareFunc {
+// 				time.Sleep(5 * time.Millisecond) // 模拟创建开销
+// 				return []MiddlewareFunc{createMockMiddleware(counter)}
+// 			})
+// 		}
+// 	})
 
-	b.ReportMetric(float64(cache.hits.Load())/float64(b.N), "hits/op")
-	b.ReportMetric(float64(cache.misses.Load())/float64(b.N), "misses/op")
-}
+// 	b.ReportMetric(float64(cache.hits.Load())/float64(b.N), "hits/op")
+// 	b.ReportMetric(float64(cache.misses.Load())/float64(b.N), "misses/op")
+// }

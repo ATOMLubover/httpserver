@@ -2,35 +2,141 @@
 package httpserver
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
-// router controlls the all routes
-// and provides interfaces to register routes and handle requests
+// Router controlls the all routes
+// and provides API to register routes and handle requests
 type _Router struct {
 	RouteGroup // inherit RouteGroup
 
-	handlers map[string]HandlerFunc // references to handler
+	httpctxTimeoutTime time.Duration // timeout time for getting Context
+	processTimeoutTime time.Duration // timeout time for handler
+
+	contextPool *_ContextPool // context pool
 }
 
-// implement http.Handler interface
-func (r *_Router) _ServeHttpImpl(w http.ResponseWriter, req *http.Request) {
+// Implement http.Handler interface.
+func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	// 1. Find the route node which can handle the request.
+	method := stringToMethod[request.Method]
+	node, uriParams := r.routeTree._Search(request.URL.Path, method)
+	if node == nil {
+		slog.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
+		// Return 400 if server cannot handle the request.
+		http.Error(writer, "Invalid request URI.", http.StatusNotFound)
+		return
+	}
 
+	// 2. If a matching route node is found, assemble the final handler.
+	finalHandler := node.handlers[method]
+	middlewareChain := node.group._GetMiddlewareChain()
+	for i := len(middlewareChain) - 1; i >= 0; i-- {
+		finalHandler = middlewareChain[i](finalHandler)
+	}
+
+	// 3. Get a timeout context in case blocking request when no context available.
+	httpctxTimeoutCtx, httpctxCancel := context.WithTimeout(context.Background(), r.httpctxTimeoutTime)
+	defer httpctxCancel()
+
+	// 4. Try getting a usable context from context pool to handle the request.
+	// 	  Or we will receive a timeout signal and just return an error response.
+	select {
+	case ctx := <-r.contextPool._GetRawPool():
+		{
+			// Ensure that the ctx will be returned to contextPool
+			defer r.contextPool._Return(ctx)
+			// Prepare ctx after getting.
+			ctx._Update(request, writer)
+			ctx.uriParams = uriParams
+
+			// Create handler timeout context
+			processTimeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
+			defer processCancel()
+
+			// Conditional variable which synchronizes the processing.
+			handlerDone := make(chan struct{})
+			// Handle in another goroutine in order to apply timeout.
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						ctx.errHandle = fmt.Errorf("panic with context(%d): %v", ctx.id, r)
+					}
+
+					// Notify the caller goroutine to go on.
+					close(handlerDone)
+				}()
+
+				// We do not support to abort a handler when it is running at current stage,
+				// so we just test whether the response has been sent before step into it.
+				// After handler finishes, check whether the response has been sent again in case it has been timeout.
+				// Though there is some performance waste.
+				if !ctx._IsResponseSent() {
+					finalHandler(ctx)
+				}
+			}()
+
+			// Wait for the timeout or the handler to finish.
+			select {
+			case <-handlerDone:
+				// If the response has been sent, just return
+				if !ctx._CasIsResponseSent() {
+					return
+				}
+
+				// Cancel processTimeoutCtx in case of resource leakage.
+				processCancel()
+
+				// If the handler panicked, return 500.
+				if ctx.errHandle != nil {
+					http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
+
+					slog.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
+					return
+				}
+				// Send normal response when no error.
+				writer.WriteHeader(ctx.statusCode)
+
+			case <-processTimeoutCtx.Done():
+				// If the response has been sent, just return
+				if !ctx._CasIsResponseSent() {
+					return
+				}
+
+				ctx.errHandle = fmt.Errorf("timeout with context(%d)", ctx.id)
+				http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
+
+				slog.Debug(fmt.Sprintf("Timeout with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
+			}
+		}
+
+	case <-httpctxTimeoutCtx.Done():
+		// If the context pool is empty, just return 503.
+		http.Error(writer, "Server busy, try later.", http.StatusServiceUnavailable)
+	}
 }
 
-// create a new router
+// Create a new router.
 func _NewRouter() *_Router {
 	return &_Router{
 		RouteGroup: RouteGroup{
-			routeTree:   _NewRouteTree(),
+			routeTree:       _NewRouteTree(),
+			middlewareCache: _NewMiddlewareChainCache(10), // 10 now because there are not many route groups
+
 			parent:      nil,
 			children:    make([]*RouteGroup, 0),
 			prefix:      "/",
 			middlewares: make([]MiddlewareFunc, 0),
 		},
-		handlers: make(map[string]HandlerFunc),
+
+		httpctxTimeoutTime: time.Millisecond * 500, // only wait 500ms when trying getting Context
+		processTimeoutTime: time.Second * 5,        // handler will have 5sec to process
+
+		contextPool: _NewContextPool(20),
 	}
 }
 
@@ -46,9 +152,6 @@ func (r *_Router) AddRoute(method Method, pattern string, handler HandlerFunc) {
 		r.routeTree.root.pattern = pattern
 		r.routeTree.root.isLeaf = true
 
-		key := method.String() + "-" + pattern
-		r.handlers[key] = handler
-
 		slog.Info(fmt.Sprintf("Added root in router: %s, method: %s", pattern, method))
 
 		return
@@ -61,11 +164,7 @@ func (r *_Router) AddRoute(method Method, pattern string, handler HandlerFunc) {
 	}
 
 	// insert into route tree
-	r.routeTree._Insert(method, pattern, handler)
-
-	// record handlers into router
-	key := method.String() + "-" + pattern
-	r.handlers[key] = handler
+	r.routeTree._Insert(method, pattern, &r.RouteGroup, handler)
 
 	slog.Info(fmt.Sprintf("Route added in router: %s [%s]", pattern, method))
 }
@@ -76,7 +175,7 @@ func (r *_Router) AddGroup(prefix string) *RouteGroup {
 	// remove the last '/'
 	parentPrefix := r.prefix[:len(r.prefix)-1]
 	// create child route group
-	child := _NewRouteGroup(&r.RouteGroup, parentPrefix+prefix)
+	child := _NewRouteGroup(r.middlewareCache, &r.RouteGroup, parentPrefix+prefix)
 
 	// add child route group to children
 	r.children = append(r.children, child)
@@ -85,6 +184,17 @@ func (r *_Router) AddGroup(prefix string) *RouteGroup {
 }
 
 // Use a new middleware into router
-func (r *_Router) UseMiddleware(middleware MiddlewareFunc) {
-	r.middlewares = append(r.middlewares, middleware)
+func (r *_Router) UseMiddleware(middleware ...MiddlewareFunc) {
+	r.middlewares = append(r.middlewares, middleware...)
+}
+
+// // Get entire middleware chain of current route group.
+// func (r *_Router) _GetMiddlewareChain() []MiddlewareFunc {
+// 	// return middlewares of router directly, because router does not have parent
+// 	return r.middlewares
+// }
+
+// Find the target route node to handle a request
+func (r *_Router) _FindNode(uri string, method Method) (*_RouteNode, map[string]string) {
+	return r.routeTree._Search(uri, method)
 }

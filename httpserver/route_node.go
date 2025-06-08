@@ -8,6 +8,8 @@ import (
 
 // Route tree node.
 type _RouteNode struct {
+	group *RouteGroup // the route group the node belongs to
+
 	pattern    string // entire route pattern
 	part       string // current route part
 	isWildcard bool   // is it a wildcard part
@@ -21,23 +23,30 @@ type _RouteNode struct {
 // Create a new route node
 func _NewRouteNode() *_RouteNode {
 	return &_RouteNode{
+		group: nil,
+
 		pattern:    "",
 		part:       "",
 		isWildcard: false,
 		isLeaf:     false,
-		children:   make([]*_RouteNode, 0),
-		handlers:   make(map[Method]HandlerFunc),
+
+		children: make([]*_RouteNode, 0),
+
+		handlers: make(map[Method]HandlerFunc),
 	}
 }
 
 // Insert node by recursion
-func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method Method, handler HandlerFunc) {
+func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *RouteGroup, method Method, handler HandlerFunc) {
 	// n is parent actually, so just end the recursion and modify n
 	if len(patternParts) == 0 {
 		if n.handlers != nil && n.handlers[method] != nil {
 			slog.Warn(fmt.Sprintf("Route %s '%s' already exists, overwriting...",
 				method, fullPattern))
 		}
+
+		// Set the route group of the node inserted.
+		n.group = group
 
 		n.pattern = fullPattern
 		n.isLeaf = true
@@ -61,7 +70,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method M
 				panic("wildcard can only be the last part")
 			}
 
-			child._Insert(fullPattern, remainingParts, method, handler)
+			child._Insert(fullPattern, remainingParts, group, method, handler)
 			return
 		}
 	}
@@ -118,7 +127,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, method M
 	n.children = append(n.children, newNode)
 	// recurse to insert the remaining parts
 	if currentPart != "*" {
-		newNode._Insert(fullPattern, remainingParts, method, handler)
+		newNode._Insert(fullPattern, remainingParts, group, method, handler)
 	}
 }
 

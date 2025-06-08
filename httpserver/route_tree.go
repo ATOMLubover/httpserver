@@ -18,7 +18,7 @@ func _NewRouteTree() *_RouteTree {
 }
 
 // Insert route into route tree.
-func (t *_RouteTree) _Insert(method Method, pattern string, handler HandlerFunc) {
+func (t *_RouteTree) _Insert(method Method, pattern string, group *RouteGroup, handler HandlerFunc) {
 	// parse pattern
 	patternParts, err := _TransformPatternIntoParts(pattern)
 	if err != nil {
@@ -26,17 +26,19 @@ func (t *_RouteTree) _Insert(method Method, pattern string, handler HandlerFunc)
 	}
 
 	// insert route node
-	t.root._Insert(pattern, patternParts, method, handler)
+	t.root._Insert(pattern, patternParts, group, method, handler)
 }
 
 // Try searching a matching route node, return nil if not found or uri is invalid.
-func (t *_RouteTree) _Search(uri string, method Method) *_RouteNode {
+func (t *_RouteTree) _Search(uri string, method Method) (*_RouteNode, map[string]string) {
 	uriParts, err := _TransformUriIntoParts(uri)
 	if err != nil {
 		slog.Debug(fmt.Sprintf("invalid uri access: %s, method: %s", uri, method))
-		return nil
+		return nil, nil
 	}
 
+	params := make(map[string]string)
 	// here may return nil if not found
-	return t.root._Find(uriParts, 0, method, nil)
+	node := t.root._Find(uriParts, 0, method, &params)
+	return node, params
 }

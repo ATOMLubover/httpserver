@@ -6,7 +6,9 @@ import (
 
 // Route group
 type RouteGroup struct {
-	routeTree *_RouteTree // ref of route tree, but is just a ref for insert and find
+	routeTree *_RouteTree // ref of route tree
+
+	middlewareCache *_MiddlewareChainCache // ref of middleware cache
 
 	parent   *RouteGroup   // parent group
 	children []*RouteGroup // children group
@@ -16,7 +18,7 @@ type RouteGroup struct {
 }
 
 // Create a new route group.
-func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
+func _NewRouteGroup(middlewareCache *_MiddlewareChainCache, parent *RouteGroup, prefix string) *RouteGroup {
 	// check the format of prefix
 	{
 		if !strings.HasPrefix(prefix, "/") || !strings.HasSuffix(prefix, "/") {
@@ -41,7 +43,8 @@ func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
 	}
 
 	return &RouteGroup{
-		routeTree: parent.routeTree,
+		routeTree:       parent.routeTree,
+		middlewareCache: middlewareCache,
 
 		parent:   parent,
 		children: make([]*RouteGroup, 0),
@@ -56,7 +59,7 @@ func _NewRouteGroup(parent *RouteGroup, prefix string) *RouteGroup {
 func (g *RouteGroup) AddRoute(method Method, pattern string, handler HandlerFunc) {
 	// pattern should start with '/'
 	if !strings.HasPrefix(pattern, "/") {
-		panic("pattern should start with '/': " + pattern)
+		panic("child pattern should start with '/': " + pattern)
 	}
 
 	// add prefix to pattern
@@ -64,7 +67,7 @@ func (g *RouteGroup) AddRoute(method Method, pattern string, handler HandlerFunc
 	pattern = g.prefix[:len(g.prefix)-1] + pattern
 
 	// insert route node
-	g.routeTree._Insert(method, pattern, handler)
+	g.routeTree._Insert(method, pattern, g, handler)
 }
 
 // Add a new child route group into this route group.
@@ -73,7 +76,7 @@ func (g *RouteGroup) AddGroup(prefix string) *RouteGroup {
 	// remove the last '/'
 	parentPrefix := g.prefix[:len(g.prefix)-1]
 	// create child route group
-	child := _NewRouteGroup(g, parentPrefix+prefix)
+	child := _NewRouteGroup(g.middlewareCache, g, parentPrefix+prefix)
 
 	// add child route group to children
 	g.children = append(g.children, child)
@@ -81,9 +84,29 @@ func (g *RouteGroup) AddGroup(prefix string) *RouteGroup {
 	return child
 }
 
-// UseMiddleware new middleware into this route group.
+// UseMiddleware insert new middleware(s) into this route group.
 // Order of this function decides the order of middleware being applied,
 // UseMiddleware firstly will be applied firstly.
-func (g *RouteGroup) UseMiddleware(middleware MiddlewareFunc) {
-	g.middlewares = append(g.middlewares, middleware)
+func (g *RouteGroup) UseMiddleware(middlewares ...MiddlewareFunc) {
+	g.middlewares = append(g.middlewares, middlewares...)
+}
+
+// Get entire middleware chain of current route group.
+func (g *RouteGroup) _GetMiddlewareChain() []MiddlewareFunc {
+	// try to get middleware chain from cache
+	middlewares := g.middlewareCache._Get(g.prefix, func() []MiddlewareFunc {
+		// create middleware chain
+		middlewares := make([]MiddlewareFunc, 0)
+		// inherit middlewares of parent runtime
+		// Branch here because router has no parent.
+		if g.parent != nil {
+			middlewares = append(middlewares, g.parent._GetMiddlewareChain()...)
+		}
+		// append middlewares of current route group
+		middlewares = append(middlewares, g.middlewares...)
+
+		return middlewares
+	})
+
+	return middlewares
 }

@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"container/list"
+	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -37,9 +39,9 @@ type _MiddlewareChainCache struct {
 	entries   map[string]*list.Element // store the middleware chain directly
 
 	// for stats
-	hits       atomic.Uint32
-	misses     atomic.Uint32
-	evications atomic.Uint32
+	hits      atomic.Uint32
+	misses    atomic.Uint32
+	evictions atomic.Uint32
 }
 
 // Create a new middleware chain cache.
@@ -156,7 +158,7 @@ func (c *_MiddlewareChainCache) _HandleCacheMiss(key string, creationFunc func()
 
 		c.lruList.Remove(elem)
 
-		c.evications.Add(1)
+		c.evictions.Add(1)
 	}
 
 	c.misses.Add(1)
@@ -235,9 +237,14 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 	}
 
 	c.lruList = newLruList
+
+	// log stats data
+	slog.Info(fmt.Sprintf(
+		"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
+		c.hits.Load(), c.misses.Load(), c.evictions.Load()))
 }
 
 // Close background rebuilder goroutine.
-func (c *_MiddlewareChainCache) Close() {
+func (c *_MiddlewareChainCache) _Close() {
 	close(c.closeChan)
 }
