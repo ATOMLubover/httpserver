@@ -42,6 +42,22 @@ func (m Method) String() string {
 	return methodToString[m]
 }
 
+// Server customizer used for function option model.
+type ServerCustomizer func(s *Server)
+
+// Server options
+type ServerOptions struct {
+	LogLevel    slog.Level // default as slog.LevelInfo
+	Customizers []ServerCustomizer
+}
+
+// Set listening port.
+func WithPort(port uint16) ServerCustomizer {
+	return func(s *Server) {
+		s.port = ":" + strconv.FormatUint(uint64(port), 10)
+	}
+}
+
 // alias of functions
 type (
 	// handler function
@@ -60,24 +76,27 @@ type Server struct {
 }
 
 // Create a new server.
-func NewServer(port uint16) *Server {
+func NewServer(opt ServerOptions) *Server {
 	// For development, set log level to DEBUG.
 	handlerOpts := &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: opt.LogLevel,
 	}
 	// At current stage, output to stdout.
 	textHandler := slog.NewTextHandler(os.Stdout, handlerOpts)
 	logger := slog.New(textHandler)
 	slog.SetDefault(logger)
 
-	if port == 0 {
-		port = 8080
-	}
-
-	return &Server{
-		port:   ":" + strconv.FormatUint(uint64(port), 10),
+	// Default configs.
+	server := &Server{
+		port:   ":8080",
 		router: _NewRouter(),
 	}
+
+	for _, customizer := range opt.Customizers {
+		customizer(server)
+	}
+
+	return server
 }
 
 // Make the server to start listening.
@@ -94,11 +113,6 @@ func (s *Server) Serve() (res error) {
 		}
 		slog.Info("Server terminated.")
 	}()
-
-	// Default listening port is 8080.
-	if s.port == "" {
-		s.port = ":8080"
-	}
 
 	s.server = http.Server{
 		Addr:    s.port,
@@ -126,7 +140,7 @@ func (s *Server) Serve() (res error) {
 // Try to shutdown server gracefully.
 // Will wait for the running handler to run another some seconds to be finished.
 func (s *Server) Shutdown() {
-	slog.Info("Shutting down server...")
+	slog.Info("\nShutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

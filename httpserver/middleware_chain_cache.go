@@ -239,12 +239,12 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 	c.lruList = newLruList
 
 	// log stats data
-	slog.Info(fmt.Sprintf(
+	slog.Debug(fmt.Sprintf(
 		"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
 		c.hits.Load(), c.misses.Load(), c.evictions.Load()))
 }
 
-// Close background rebuilder goroutine.
-func (c *_MiddlewareChainCache) _Close() {
-	close(c.closeChan)
-}
+// // Close background rebuilder goroutine.
+// func (c *_MiddlewareChainCache) _Close() {
+// 	close(c.closeChan)
+// }

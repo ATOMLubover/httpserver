@@ -99,7 +99,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 					return
 				}
 				// Send normal response when no error.
-				writer.WriteHeader(ctx.statusCode)
+				ctx._Send()
 
 			case <-processTimeoutCtx.Done():
 				// If the response has been sent, just return
@@ -194,7 +194,7 @@ func (r *_Router) UseMiddleware(middleware ...MiddlewareFunc) {
 // 	return r.middlewares
 // }
 
-// Find the target route node to handle a request
-func (r *_Router) _FindNode(uri string, method Method) (*_RouteNode, map[string]string) {
-	return r.routeTree._Search(uri, method)
-}
+// // Find the target route node to handle a request
+// func (r *_Router) _FindNode(uri string, method Method) (*_RouteNode, map[string]string) {
+// 	return r.routeTree._Search(uri, method)
+// }

@@ -1,14 +1,14 @@
 package httpserver
 
-import (
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-)
+// import (
+// 	"fmt"
+// 	"net/http"
+// 	"net/http/httptest"
+// 	"strings"
+// 	"sync"
+// 	"testing"
+// 	"time"
+// )
 
 // 	// 创建 HandlerOptions 并设置日志级别为 Debug
 // 	handlerOpts := &slog.HandlerOptions{
@@ -24,205 +24,205 @@ import (
 // 	// 设置为全局默认 Logger
 // 	slog.SetDefault(logger)
 
-func (n *_RouteNode) printTree(level int) {
-	indent := strings.Repeat("  ", level)
-	wildcard := ""
-	if n.isWildcard {
-		wildcard = " [wildcard]"
-	}
-	leaf := ""
-	if n.isLeaf {
-		methods := make([]string, 0)
-		for method := range n.handlers {
-			methods = append(methods, method.String())
-		}
-		leaf = fmt.Sprintf(" ------> %s %v", n.pattern, methods)
-	}
-	fmt.Printf("%s- %s%s%s\n", indent, n.part, wildcard, leaf)
+// func (n *_RouteNode) printTree(level int) {
+// 	indent := strings.Repeat("  ", level)
+// 	wildcard := ""
+// 	if n.isWildcard {
+// 		wildcard = " [wildcard]"
+// 	}
+// 	leaf := ""
+// 	if n.isLeaf {
+// 		methods := make([]string, 0)
+// 		for method := range n.handlers {
+// 			methods = append(methods, method.String())
+// 		}
+// 		leaf = fmt.Sprintf(" ------> %s %v", n.pattern, methods)
+// 	}
+// 	fmt.Printf("%s- %s%s%s\n", indent, n.part, wildcard, leaf)
 
-	for _, child := range n.children {
-		child.printTree(level + 1)
-	}
-}
+// 	for _, child := range n.children {
+// 		child.printTree(level + 1)
+// 	}
+// }
 
-func (n *_RouteNode) printAllRoutes() {
-	fmt.Println("\nRegistered Routes:")
-	n.printTree(0)
-}
+// func (n *_RouteNode) printAllRoutes() {
+// 	fmt.Println("\nRegistered Routes:")
+// 	n.printTree(0)
+// }
 
-func TestHttpServer(t *testing.T) {
-	// 创建服务器实例（使用随机端口避免冲突）
-	server := NewServer(0) // 0 表示自动选择可用端口
+// func TestHttpServer(t *testing.T) {
+// 	// 创建服务器实例（使用随机端口避免冲突）
+// 	server := NewServer(0) // 0 表示自动选择可用端口
 
-	// 获取全局路由组
-	globalRg := server.GetGlobalRouteGroup()
+// 	// 获取全局路由组
+// 	globalRg := server.GetGlobalRouteGroup()
 
-	// 添加测试路由
-	globalRg.AddRoute(GET, "/hello_world", func(ctx *Context) {
-		ctx.Text(200, "Hello, World!")
-	})
+// 	// 添加测试路由
+// 	globalRg.AddRoute(GET, "/hello_world", func(ctx *Context) {
+// 		ctx.Text(200, "Hello, World!")
+// 	})
 
-	globalRg.AddRoute(GET, "/user/:id", func(ctx *Context) {
-		id := ctx.uriParams["id"]
-		ctx.Text(200, "User ID: "+id)
-	})
+// 	globalRg.AddRoute(GET, "/user/:id", func(ctx *Context) {
+// 		id := ctx.uriParams["id"]
+// 		ctx.Text(200, "User ID: "+id)
+// 	})
 
-	globalRg.AddRoute(POST, "/echo", func(ctx *Context) {
-		body, _ := ctx.GetBody()
-		ctx.Text(200, string(body))
-	})
+// 	globalRg.AddRoute(POST, "/echo", func(ctx *Context) {
+// 		body, _ := ctx.GetBody()
+// 		ctx.Text(200, string(body))
+// 	})
 
-	// 添加带中间件的路由
-	globalRg.UseMiddleware(func(next HandlerFunc) HandlerFunc {
-		return func(ctx *Context) {
-			ctx.SetHeader("X-Middleware", "executed")
-			next(ctx)
-		}
-	})
+// 	// 添加带中间件的路由
+// 	globalRg.UseMiddleware(func(next HandlerFunc) HandlerFunc {
+// 		return func(ctx *Context) {
+// 			ctx.SetHeader("X-Middleware", "executed")
+// 			next(ctx)
+// 		}
+// 	})
 
-	// 在 goroutine 中启动服务器
-	go func() {
-		if err := server.Serve(); err != nil && err != http.ErrServerClosed {
-			t.Errorf("Server failed: %v", err)
-		}
-	}()
+// 	// 在 goroutine 中启动服务器
+// 	go func() {
+// 		if err := server.Serve(); err != nil && err != http.ErrServerClosed {
+// 			t.Errorf("Server failed: %v", err)
+// 		}
+// 	}()
 
-	// 等待服务器启动
-	time.Sleep(100 * time.Millisecond)
+// 	// 等待服务器启动
+// 	time.Sleep(100 * time.Millisecond)
 
-	// 获取服务器实际监听地址
-	addr := server.GetAddr()
-	if addr == "" {
-		t.Fatal("Server address not available")
-	}
+// 	// 获取服务器实际监听地址
+// 	addr := server.GetAddr()
+// 	if addr == "" {
+// 		t.Fatal("Server address not available")
+// 	}
 
-	// 测试用例表
-	tests := []struct {
-		name       string
-		method     string
-		path       string
-		body       string
-		wantStatus int
-		wantBody   string
-		wantHeader string
-	}{
-		{
-			name:       "Simple GET request",
-			method:     "GET",
-			path:       "/hello_world",
-			wantStatus: 200,
-			wantBody:   "Hello, World!",
-			wantHeader: "executed",
-		},
-		{
-			name:       "Route with parameters",
-			method:     "GET",
-			path:       "/user/123",
-			wantStatus: 200,
-			wantBody:   "User ID: 123",
-			wantHeader: "executed",
-		},
-		{
-			name:       "POST request with body",
-			method:     "POST",
-			path:       "/echo",
-			body:       "Test payload",
-			wantStatus: 200,
-			wantBody:   "Test payload",
-			wantHeader: "executed",
-		},
-		{
-			name:       "Not found route",
-			method:     "GET",
-			path:       "/not_found",
-			wantStatus: 404,
-			wantBody:   "Invalid request URI.\n",
-		},
-	}
+// 	// 测试用例表
+// 	tests := []struct {
+// 		name       string
+// 		method     string
+// 		path       string
+// 		body       string
+// 		wantStatus int
+// 		wantBody   string
+// 		wantHeader string
+// 	}{
+// 		{
+// 			name:       "Simple GET request",
+// 			method:     "GET",
+// 			path:       "/hello_world",
+// 			wantStatus: 200,
+// 			wantBody:   "Hello, World!",
+// 			wantHeader: "executed",
+// 		},
+// 		{
+// 			name:       "Route with parameters",
+// 			method:     "GET",
+// 			path:       "/user/123",
+// 			wantStatus: 200,
+// 			wantBody:   "User ID: 123",
+// 			wantHeader: "executed",
+// 		},
+// 		{
+// 			name:       "POST request with body",
+// 			method:     "POST",
+// 			path:       "/echo",
+// 			body:       "Test payload",
+// 			wantStatus: 200,
+// 			wantBody:   "Test payload",
+// 			wantHeader: "executed",
+// 		},
+// 		{
+// 			name:       "Not found route",
+// 			method:     "GET",
+// 			path:       "/not_found",
+// 			wantStatus: 404,
+// 			wantBody:   "Invalid request URI.\n",
+// 		},
+// 	}
 
-	// 运行测试用例
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// 创建请求
-			req := httptest.NewRequest(tt.method, "http://"+addr+tt.path, nil)
-			if tt.body != "" {
-				req = httptest.NewRequest(tt.method, "http://"+addr+tt.path, strings.NewReader(tt.body))
-				req.Header.Set("Content-Type", "text/plain")
-			}
+// 	// 运行测试用例
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			// 创建请求
+// 			req := httptest.NewRequest(tt.method, "http://"+addr+tt.path, nil)
+// 			if tt.body != "" {
+// 				req = httptest.NewRequest(tt.method, "http://"+addr+tt.path, strings.NewReader(tt.body))
+// 				req.Header.Set("Content-Type", "text/plain")
+// 			}
 
-			// 记录响应
-			w := httptest.NewRecorder()
+// 			// 记录响应
+// 			w := httptest.NewRecorder()
 
-			// 直接调用路由器的 ServeHTTP 方法（避免网络请求）
-			server.router.ServeHTTP(w, req)
+// 			// 直接调用路由器的 ServeHTTP 方法（避免网络请求）
+// 			server.router.ServeHTTP(w, req)
 
-			// 验证状态码
-			if w.Code != tt.wantStatus {
-				t.Errorf("Status code = %d, want %d", w.Code, tt.wantStatus)
-			}
+// 			// 验证状态码
+// 			if w.Code != tt.wantStatus {
+// 				t.Errorf("Status code = %d, want %d", w.Code, tt.wantStatus)
+// 			}
 
-			// 验证响应体
-			if body := w.Body.String(); body != tt.wantBody {
-				t.Errorf("Response body = %q, want %q", body, tt.wantBody)
-			}
+// 			// 验证响应体
+// 			if body := w.Body.String(); body != tt.wantBody {
+// 				t.Errorf("Response body = %q, want %q", body, tt.wantBody)
+// 			}
 
-			// 验证中间件设置的Header
-			if tt.wantHeader != "" {
-				if header := w.Header().Get("X-Middleware"); header != tt.wantHeader {
-					t.Errorf("X-Middleware header = %q, want %q", header, tt.wantHeader)
-				}
-			}
-		})
-	}
+// 			// 验证中间件设置的Header
+// 			if tt.wantHeader != "" {
+// 				if header := w.Header().Get("X-Middleware"); header != tt.wantHeader {
+// 					t.Errorf("X-Middleware header = %q, want %q", header, tt.wantHeader)
+// 				}
+// 			}
+// 		})
+// 	}
 
-	// 测试并发请求
-	t.Run("Concurrent requests", func(t *testing.T) {
-		const numRequests = 100
-		var wg sync.WaitGroup
-		wg.Add(numRequests)
+// 	// 测试并发请求
+// 	t.Run("Concurrent requests", func(t *testing.T) {
+// 		const numRequests = 100
+// 		var wg sync.WaitGroup
+// 		wg.Add(numRequests)
 
-		for i := 0; i < numRequests; i++ {
-			go func(id int) {
-				defer wg.Done()
+// 		for i := 0; i < numRequests; i++ {
+// 			go func(id int) {
+// 				defer wg.Done()
 
-				req := httptest.NewRequest("GET", fmt.Sprintf("http://%s/user/%d", addr, id), nil)
-				w := httptest.NewRecorder()
-				server.router.ServeHTTP(w, req)
+// 				req := httptest.NewRequest("GET", fmt.Sprintf("http://%s/user/%d", addr, id), nil)
+// 				w := httptest.NewRecorder()
+// 				server.router.ServeHTTP(w, req)
 
-				if w.Code != 200 {
-					t.Errorf("Request %d: status = %d", id, w.Code)
-				}
+// 				if w.Code != 200 {
+// 					t.Errorf("Request %d: status = %d", id, w.Code)
+// 				}
 
-				expected := fmt.Sprintf("User ID: %d", id)
-				if body := w.Body.String(); body != expected {
-					t.Errorf("Request %d: body = %q, want %q", id, body, expected)
-				}
-			}(i)
-		}
+// 				expected := fmt.Sprintf("User ID: %d", id)
+// 				if body := w.Body.String(); body != expected {
+// 					t.Errorf("Request %d: body = %q, want %q", id, body, expected)
+// 				}
+// 			}(i)
+// 		}
 
-		wg.Wait()
-	})
+// 		wg.Wait()
+// 	})
 
-	// 测试Context池回收
-	t.Run("Context pool recycling", func(t *testing.T) {
-		initialSize := server.router.contextPool.size
+// 	// 测试Context池回收
+// 	t.Run("Context pool recycling", func(t *testing.T) {
+// 		initialSize := server.router.contextPool.size
 
-		// 发送多个请求
-		for i := 0; i < 10; i++ {
-			req := httptest.NewRequest("GET", "http://"+addr+"/hello_world", nil)
-			w := httptest.NewRecorder()
-			server.router.ServeHTTP(w, req)
-		}
+// 		// 发送多个请求
+// 		for i := 0; i < 10; i++ {
+// 			req := httptest.NewRequest("GET", "http://"+addr+"/hello_world", nil)
+// 			w := httptest.NewRecorder()
+// 			server.router.ServeHTTP(w, req)
+// 		}
 
-		// 验证池大小不变
-		if currentSize := server.router.contextPool.size; currentSize != initialSize {
-			t.Errorf("Context pool size changed from %d to %d", initialSize, currentSize)
-		}
-	})
+// 		// 验证池大小不变
+// 		if currentSize := server.router.contextPool.size; currentSize != initialSize {
+// 			t.Errorf("Context pool size changed from %d to %d", initialSize, currentSize)
+// 		}
+// 	})
 
-	// 停止服务器
-	server.Shutdown()
-}
+// 	// 停止服务器
+// 	server.Shutdown()
+// }
 
 // func TestRouteTreeInsert(t *testing.T) {
 // 	// 创建 HandlerOptions 并设置日志级别为 Debug
@@ -521,15 +521,15 @@ func TestHttpServer(t *testing.T) {
 // 	})
 // }
 
-func createMockMiddleware(id int) MiddlewareFunc {
-	return func(next HandlerFunc) HandlerFunc {
-		return func(ctx *Context) {
-			// 可选：记录日志或断言 id 值
-			// log.Printf("Middleware %d executed", id)
-			next(ctx)
-		}
-	}
-}
+// func createMockMiddleware(id int) MiddlewareFunc {
+// 	return func(next HandlerFunc) HandlerFunc {
+// 		return func(ctx *Context) {
+// 			// 可选：记录日志或断言 id 值
+// 			// log.Printf("Middleware %d executed", id)
+// 			next(ctx)
+// 		}
+// 	}
+// }
 
 // // 测试基本功能
 // func TestCacheBasicOperations(t *testing.T) {

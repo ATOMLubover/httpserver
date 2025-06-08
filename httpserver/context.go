@@ -1,9 +1,9 @@
 package httpserver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -20,6 +20,9 @@ type Context struct {
 	queryParams map[string]string      // params of GET query
 	section     string                 // param of the hash section
 	userValues  map[string]interface{} // values users set
+
+	headBuffer http.Header   // temporarily store the header of response
+	bodyBuffer *bytes.Buffer // temporarily store the body of response
 
 	errHandle  error // the error collected when handling
 	statusCode int   // the status code to write in the response
@@ -41,6 +44,8 @@ func _NewContext(id int) *Context {
 		queryParams: nil,
 		section:     "",
 		userValues:  make(map[string]interface{}), // only this member is not nil at first
+
+		bodyBuffer: bytes.NewBuffer(nil),
 
 		errHandle:  nil,
 		statusCode: http.StatusOK, // default as 200
@@ -66,6 +71,8 @@ func (c *Context) _Reset() {
 	c.queryParams = nil
 	c.section = ""
 	c.userValues = nil
+
+	c.bodyBuffer.Reset()
 
 	c.errHandle = nil
 	c.statusCode = http.StatusOK
@@ -114,10 +121,15 @@ func (c *Context) GetKeyValue(key string) (interface{}, bool) {
 	return value, isExisating
 }
 
+// Get header of request.
+func (c *Context) GetReqHeader(key string) string {
+	return c.rawRequest.Header.Get(key)
+}
+
 // Return text/plain response
 func (c *Context) Text(statusCode int, msg string) {
 	c.rawResponseWriter.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(c.rawResponseWriter, msg)
+	c.bodyBuffer.WriteString(msg)
 
 	c.statusCode = statusCode
 }
@@ -125,7 +137,7 @@ func (c *Context) Text(statusCode int, msg string) {
 // Return JSON response.
 func (c *Context) Json(statusCode int, obj interface{}) {
 	c.rawResponseWriter.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(c.rawResponseWriter).Encode(obj)
+	json.NewEncoder(c.bodyBuffer).Encode(obj)
 
 	c.statusCode = statusCode
 }
@@ -141,6 +153,14 @@ func (c *Context) GetBody() ([]byte, error) {
 }
 
 // Set the header of response.
+// Notice that an existing header with the same key will not be overwritten.
 func (c *Context) SetHeader(key, value string) {
 	c.rawResponseWriter.Header().Set(key, value)
+}
+
+// Send response.
+func (c *Context) _Send() {
+	// Send head firstly, and then send the body.
+	c.rawResponseWriter.WriteHeader(c.statusCode)
+	c.bodyBuffer.WriteTo(c.rawResponseWriter)
 }
