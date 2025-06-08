@@ -127,6 +127,9 @@ func (s *Server) Serve() (res error) {
 	}()
 	slog.Info(fmt.Sprintf("Server now listening on port %s", s.port))
 
+	exePath, _ := os.Executable()
+	slog.Info("Current executable directory: " + exePath)
+
 	quitChan := make(chan os.Signal, 1)
 	signal.Notify(quitChan, syscall.SIGTERM, syscall.SIGINT)
 	// Wait for shutdown signal.
@@ -140,7 +143,7 @@ func (s *Server) Serve() (res error) {
 // Try to shutdown server gracefully.
 // Will wait for the running handler to run another some seconds to be finished.
 func (s *Server) Shutdown() {
-	slog.Info("\nShutting down server...")
+	slog.Info("Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

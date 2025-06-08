@@ -4,8 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 )
 
@@ -21,15 +28,16 @@ type Context struct {
 	section     string                 // param of the hash section
 	userValues  map[string]interface{} // values users set
 
-	headBuffer http.Header   // temporarily store the header of response
-	bodyBuffer *bytes.Buffer // temporarily store the body of response
+	sendType int // 0: short text response, 1: file stream
+
+	bodyBuffer *bytes.Buffer // temporarily store the body of short response
+	filepath   string        // file physical path
+	filename   string        // complete file name
 
 	errHandle  error // the error collected when handling
 	statusCode int   // the status code to write in the response
 
 	isResponseSent uint32 // atomic flag, 0 for false, 1 for true
-
-	// isAborted bool // whether abort the middlewares after handler(depends on the implementation of MiddlewareFunc)
 }
 
 // Create a new context.
@@ -45,7 +53,11 @@ func _NewContext(id int) *Context {
 		section:     "",
 		userValues:  make(map[string]interface{}), // only this member is not nil at first
 
+		sendType: 0,
+
 		bodyBuffer: bytes.NewBuffer(nil),
+		filename:   "",
+		filepath:   "",
 
 		errHandle:  nil,
 		statusCode: http.StatusOK, // default as 200
@@ -72,7 +84,11 @@ func (c *Context) _Reset() {
 	c.section = ""
 	c.userValues = nil
 
+	c.sendType = 0
+
 	c.bodyBuffer.Reset()
+	c.filename = ""
+	c.filepath = ""
 
 	c.errHandle = nil
 	c.statusCode = http.StatusOK
@@ -142,7 +158,19 @@ func (c *Context) Json(statusCode int, obj interface{}) {
 	c.statusCode = statusCode
 }
 
-// Get the body of response.
+// Return stream file response.
+func (c *Context) StreamFile(statusCode int, filePath string) {
+	c.rawResponseWriter.Header().Set("Content-Type", "application/octet-stream")
+
+	filePath = filepath.Clean(filePath)
+	filePathParts := strings.Split(filePath, string(filepath.Separator))
+	c.filename = filePathParts[len(filePathParts)-1]
+	c.filepath = filePath
+
+	c.sendType = 1
+}
+
+// Get the body of request.
 func (c *Context) GetBody() ([]byte, error) {
 	if c.rawRequest.Body == nil {
 		return nil, errors.New("no request body")
@@ -153,14 +181,77 @@ func (c *Context) GetBody() ([]byte, error) {
 }
 
 // Set the header of response.
-// Notice that an existing header with the same key will not be overwritten.
+// Notice that an existing header with the same key will not overwritten.
 func (c *Context) SetHeader(key, value string) {
 	c.rawResponseWriter.Header().Set(key, value)
 }
 
+// Modify existing header.
+func (c *Context) ModifyHeader(key string, values []string) {
+	c.rawResponseWriter.Header()[key] = values
+}
+
 // Send response.
+// We always send header first and then send the body.
 func (c *Context) _Send() {
-	// Send head firstly, and then send the body.
-	c.rawResponseWriter.WriteHeader(c.statusCode)
-	c.bodyBuffer.WriteTo(c.rawResponseWriter)
+	switch c.sendType {
+	case 0:
+		{
+			if c.bodyBuffer == nil {
+				slog.Error(fmt.Sprintf("Body buffer is nil when sending response(context: %d, URI: %s).", c.id, c.rawRequest.RequestURI))
+				return
+			}
+
+			// Send header.
+			c.rawResponseWriter.WriteHeader(c.statusCode)
+
+			// Send body.
+			c.bodyBuffer.WriteTo(c.rawResponseWriter)
+		}
+
+	case 1:
+		{
+			if c.filepath == "" || c.filename == "" {
+				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
+
+				slog.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(context: %d, URI: %s).", c.filepath, c.filename, c.id, c.rawRequest.RequestURI))
+				return
+			}
+
+			// Open file.
+			file, err := os.Open(c.filepath)
+			defer file.Close()
+			if err != nil {
+				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
+
+				slog.Error(fmt.Sprintf("Failed to open file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				return
+			}
+
+			// Get meta.
+			meta, err := file.Stat()
+			if err != nil {
+				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
+
+				slog.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				return
+			}
+
+			// Set content length.
+			fileSize := meta.Size()
+			c.SetHeader("Content-Length", strconv.FormatInt(fileSize, 10))
+
+			contentType := mime.TypeByExtension(filepath.Ext(c.filepath))
+			// If contentType is "", just set it to "application/octet-stream".
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+
+			// Send header.
+			c.rawResponseWriter.WriteHeader(c.statusCode)
+
+			// Send file body using stream.
+			io.Copy(c.rawResponseWriter, file)
+		}
+	}
 }

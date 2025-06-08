@@ -107,10 +107,9 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 					return
 				}
 
-				ctx.errHandle = fmt.Errorf("timeout with context(%d)", ctx.id)
 				http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
 
-				slog.Debug(fmt.Sprintf("Timeout with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
+				slog.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
 			}
 		}
 
