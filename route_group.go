@@ -72,6 +72,7 @@ func (g *RouteGroup) AddRoute(method Method, pattern string, handler HandlerFunc
 
 // Add a new child route group into this route group.
 // Return the child route group newly created.
+// Prefix should start and end with '/'.
 func (g *RouteGroup) AddGroup(prefix string) *RouteGroup {
 	// remove the last '/'
 	parentPrefix := g.prefix[:len(g.prefix)-1]
