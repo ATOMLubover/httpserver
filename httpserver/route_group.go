@@ -89,6 +89,9 @@ func (g *RouteGroup) AddGroup(prefix string) *RouteGroup {
 // UseMiddleware firstly will be applied firstly.
 func (g *RouteGroup) UseMiddleware(middlewares ...MiddlewareFunc) {
 	g.middlewares = append(g.middlewares, middlewares...)
+	// Update middleware cache immidiately.
+	// This operation would cause a very long time pause.
+	g.middlewareCache._InvalidateMiddlewareChain(g.prefix)
 }
 
 // Get entire middleware chain of current route group.

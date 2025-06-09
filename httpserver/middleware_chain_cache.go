@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,6 +242,44 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 	gLogger.Debug(fmt.Sprintf(
 		"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
 		c.hits.Load(), c.misses.Load(), c.evictions.Load()))
+}
+
+// Modify middleware chain cache of specific route group.
+// Use this function less in runtime, because it will get gloabl mutex.
+func (c *_MiddlewareChainCache) _InvalidateMiddlewareChain(prefix string) {
+	c.globalMutex.Lock()
+	defer c.globalMutex.Unlock()
+
+	// Invalidate entries related to the prefix in lruList.
+	toDelete := make([]*list.Element, 0)
+	for e := c.lruList.Front(); e != nil; e = e.Next() {
+		entry := e.Value.(*_MiddlewareChainCacheEntry)
+		if strings.HasPrefix(entry.key, prefix) {
+			toDelete = append(toDelete, e)
+		}
+	}
+	for _, e := range toDelete {
+		c.lruList.Remove(e)
+	}
+
+	// Invalidate entries related to the prefix in dirtyList.
+	toDelete = make([]*list.Element, 0)
+	for e := c.dirtyList.Front(); e != nil; e = e.Next() {
+		entry := e.Value.(*_MiddlewareChainCacheEntry)
+		if strings.HasPrefix(entry.key, prefix) {
+			toDelete = append(toDelete, e)
+		}
+	}
+	for _, e := range toDelete {
+		c.dirtyList.Remove(e)
+	}
+
+	// Lastly, remove the related entries from the map.
+	for k := range c.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.entries, k)
+		}
+	}
 }
 
 // // Close background rebuilder goroutine.
