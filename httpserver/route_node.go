@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -41,7 +40,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 	// n is parent actually, so just end the recursion and modify n
 	if len(patternParts) == 0 {
 		if n.handlers != nil && n.handlers[method] != nil {
-			slog.Warn(fmt.Sprintf("Route %s '%s' already exists, overwriting...",
+			gLogger.Warn(fmt.Sprintf("Route %s '%s' already exists, overwriting...",
 				method, fullPattern))
 		}
 
@@ -52,7 +51,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 		n.isLeaf = true
 		n.handlers[method] = handler
 
-		slog.Debug("Inserted route: " + fullPattern)
+		gLogger.Debug("Inserted route: " + fullPattern)
 
 		return
 	}
@@ -136,11 +135,11 @@ func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params 
 	// end recursion when matching all parts
 	if height == len(uriParts) {
 		if n.isLeaf {
-			slog.Debug(fmt.Sprintf("Leaf node matched: %v, method: %s, params: %v",
+			gLogger.Debug(fmt.Sprintf("Leaf node matched: %v, method: %s, params: %v",
 				n.pattern, method, *params))
 			return n
 		}
-		slog.Debug(fmt.Sprintf("No leaf node matched with: %v, method: %s", uriParts, method))
+		gLogger.Debug(fmt.Sprintf("No leaf node matched with: %v, method: %s", uriParts, method))
 		return nil
 	}
 
@@ -168,7 +167,7 @@ func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params 
 		case ':':
 			// refuse empty string
 			if currentPart == "" {
-				slog.Debug("colon meets empty string")
+				gLogger.Debug("colon meets empty string")
 				continue
 			}
 
@@ -200,7 +199,7 @@ func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params 
 				(*params)[paramKey] = strings.Join(uriParts[height:], "/")
 			}
 
-			slog.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
+			gLogger.Debug(fmt.Sprintf("Asterisk node matched: %v, params: %v",
 				child.pattern, *params))
 			return child
 		}

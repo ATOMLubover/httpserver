@@ -4,7 +4,6 @@ package httpserver
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 )
@@ -26,7 +25,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	method := stringToMethod[request.Method]
 	node, uriParams := r.routeTree._Search(request.URL.Path, method)
 	if node == nil {
-		slog.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
+		gLogger.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
 		// Return 400 if server cannot handle the request.
 		http.Error(writer, "Invalid request URI.", http.StatusNotFound)
 		return
@@ -95,7 +94,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				if ctx.errHandle != nil {
 					http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
 
-					slog.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
+					gLogger.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
 					return
 				}
 				// Send normal response when no error.
@@ -109,7 +108,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 				http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
 
-				slog.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
+				gLogger.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
 			}
 		}
 
@@ -124,7 +123,7 @@ func _NewRouter() *_Router {
 	return &_Router{
 		RouteGroup: RouteGroup{
 			routeTree:       _NewRouteTree(),
-			middlewareCache: _NewMiddlewareChainCache(10), // 10 now because there are not many route groups
+			middlewareCache: _NewMiddlewareChainCache(), // 10 now because there are not many route groups
 
 			parent:      nil,
 			children:    make([]*RouteGroup, 0),
@@ -132,10 +131,10 @@ func _NewRouter() *_Router {
 			middlewares: make([]MiddlewareFunc, 0),
 		},
 
-		httpctxTimeoutTime: time.Millisecond * 500, // only wait 500ms when trying getting Context
-		processTimeoutTime: time.Second * 5,        // handler will have 5sec to process
+		httpctxTimeoutTime: time.Second * 3, // wait 3sec when trying getting Context
+		processTimeoutTime: time.Second * 5, // handler will have 5sec to process after getting a context
 
-		contextPool: _NewContextPool(20),
+		contextPool: _NewContextPool(),
 	}
 }
 
@@ -151,7 +150,7 @@ func (r *_Router) AddRoute(method Method, pattern string, handler HandlerFunc) {
 		r.routeTree.root.pattern = pattern
 		r.routeTree.root.isLeaf = true
 
-		slog.Info(fmt.Sprintf("Added root in router: %s, method: %s", pattern, method))
+		gLogger.Info(fmt.Sprintf("Added root in router: %s, method: %s", pattern, method))
 
 		return
 	}
@@ -165,7 +164,7 @@ func (r *_Router) AddRoute(method Method, pattern string, handler HandlerFunc) {
 	// insert into route tree
 	r.routeTree._Insert(method, pattern, &r.RouteGroup, handler)
 
-	slog.Info(fmt.Sprintf("Route added in router: %s [%s]", pattern, method))
+	gLogger.Info(fmt.Sprintf("Route added in router: %s [%s]", pattern, method))
 }
 
 // Add a new child route group into this route group.
@@ -182,10 +181,10 @@ func (r *_Router) AddGroup(prefix string) *RouteGroup {
 	return child
 }
 
-// Use a new middleware into router
-func (r *_Router) UseMiddleware(middleware ...MiddlewareFunc) {
-	r.middlewares = append(r.middlewares, middleware...)
-}
+// // Use a new middleware into router
+// func (r *_Router) UseMiddleware(middleware ...MiddlewareFunc) {
+// 	r.middlewares = append(r.middlewares, middleware...)
+// }
 
 // // Get entire middleware chain of current route group.
 // func (r *_Router) _GetMiddlewareChain() []MiddlewareFunc {

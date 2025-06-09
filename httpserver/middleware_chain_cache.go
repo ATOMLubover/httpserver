@@ -3,7 +3,6 @@ package httpserver
 import (
 	"container/list"
 	"fmt"
-	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -45,11 +44,11 @@ type _MiddlewareChainCache struct {
 }
 
 // Create a new middleware chain cache.
-func _NewMiddlewareChainCache(maxSize int) *_MiddlewareChainCache {
+func _NewMiddlewareChainCache() *_MiddlewareChainCache {
 	cache := &_MiddlewareChainCache{
-		maxSize: maxSize,
+		maxSize: gConfig.midChainCacheCfg.maxSize,
 
-		rebuildInterval: time.Second, // Rebuild every one second.
+		rebuildInterval: gConfig.midChainCacheCfg.rebuildInterval,
 		closeChan:       make(chan struct{}),
 
 		lruList:   list.New(),
@@ -239,7 +238,7 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 	c.lruList = newLruList
 
 	// log stats data
-	slog.Debug(fmt.Sprintf(
+	gLogger.Debug(fmt.Sprintf(
 		"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
 		c.hits.Load(), c.misses.Load(), c.evictions.Load()))
 }

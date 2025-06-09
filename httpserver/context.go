@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -14,6 +13,12 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+)
+
+// Send type.
+const (
+	NORMAL_CONT int = iota
+	STREAM_STATIC
 )
 
 // HTTP context
@@ -82,7 +87,10 @@ func (c *Context) _Reset() {
 	c.uriParams = nil
 	c.queryParams = nil
 	c.section = ""
-	c.userValues = nil
+	// Keep the original map not deconstructed.
+	for key := range c.queryParams {
+		delete(c.queryParams, key)
+	}
 
 	c.sendType = 0
 
@@ -158,10 +166,9 @@ func (c *Context) Json(statusCode int, obj interface{}) {
 	c.statusCode = statusCode
 }
 
-// Return stream file response.
+// Return file response using stream.
+// But it is not recommanded that use this function to handle frequent file request.
 func (c *Context) StreamFile(statusCode int, filePath string) {
-	c.rawResponseWriter.Header().Set("Content-Type", "application/octet-stream")
-
 	filePath = filepath.Clean(filePath)
 	filePathParts := strings.Split(filePath, string(filepath.Separator))
 	c.filename = filePathParts[len(filePathParts)-1]
@@ -198,7 +205,7 @@ func (c *Context) _Send() {
 	case 0:
 		{
 			if c.bodyBuffer == nil {
-				slog.Error(fmt.Sprintf("Body buffer is nil when sending response(context: %d, URI: %s).", c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Body buffer is nil when sending response(context: %d, URI: %s).", c.id, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -214,7 +221,7 @@ func (c *Context) _Send() {
 			if c.filepath == "" || c.filename == "" {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				slog.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(context: %d, URI: %s).", c.filepath, c.filename, c.id, c.rawRequest.RequestURI))
+				gLogger.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(context: %d, URI: %s).", c.filepath, c.filename, c.id, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -224,7 +231,7 @@ func (c *Context) _Send() {
 			if err != nil {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				slog.Error(fmt.Sprintf("Failed to open file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Failed to open file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -233,7 +240,7 @@ func (c *Context) _Send() {
 			if err != nil {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				slog.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -251,6 +258,8 @@ func (c *Context) _Send() {
 			c.rawResponseWriter.WriteHeader(c.statusCode)
 
 			// Send file body using stream.
+			// Because we set Content-Length, chunked will disabled.
+			// But this function still apply 0-copy transferring.
 			io.Copy(c.rawResponseWriter, file)
 		}
 	}

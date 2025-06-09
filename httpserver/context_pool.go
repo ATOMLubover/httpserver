@@ -1,7 +1,5 @@
 package httpserver
 
-import "log/slog"
-
 // Context pool with fixed size.
 // Store contexts waiting to be reused.
 type _ContextPool struct {
@@ -10,16 +8,16 @@ type _ContextPool struct {
 }
 
 // Create a new context pool.
-func _NewContextPool(size int) *_ContextPool {
+func _NewContextPool() *_ContextPool {
 	p := &_ContextPool{
-		pool: make(chan *Context, size),
+		pool: make(chan *Context, gConfig.routerCfg.ctxPoolSize),
 	}
 
 	// Initialize contexts.
-	for i := 0; i < size; i++ {
+	for i := 0; i < gConfig.routerCfg.ctxPoolSize; i++ {
 		p.pool <- _NewContext(i)
 	}
-	p.size = size
+	p.size = gConfig.routerCfg.ctxPoolSize
 
 	return p
 }
@@ -47,6 +45,6 @@ func (p *_ContextPool) _Return(ctx *Context) {
 		// Put the context back to the pool.
 	default:
 		// Or the pool is full.But it is impossible.
-		slog.Warn("Context pool is full unexpectedly.")
+		gLogger.Warn("Context pool is full unexpectedly.")
 	}
 }
