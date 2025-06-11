@@ -38,84 +38,155 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		finalHandler = middlewareChain[i](finalHandler)
 	}
 
-	// 3. Get a timeout context in case blocking request when no context available.
-	httpctxTimeoutCtx, httpctxCancel := context.WithTimeout(context.Background(), r.httpctxTimeoutTime)
-	defer httpctxCancel()
-
-	// 4. Try getting a usable context from context pool to handle the request.
-	// 	  Or we will receive a timeout signal and just return an error response.
-	select {
-	case ctx := <-r.contextPool._GetRawPool():
-		{
-			// Ensure that the ctx will be returned to contextPool
-			defer r.contextPool._Return(ctx)
-			// Prepare ctx after getting.
-			ctx._Update(request, writer)
-			ctx.uriParams = uriParams
-
-			// Create handler timeout context
-			processTimeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
-			defer processCancel()
-
-			// Conditional variable which synchronizes the processing.
-			handlerDone := make(chan struct{})
-			// Handle in another goroutine in order to apply timeout.
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						ctx.errHandle = fmt.Errorf("panic with context(%d): %v", ctx.id, r)
-					}
-
-					// Notify the caller goroutine to go on.
-					close(handlerDone)
-				}()
-
-				// We do not support to abort a handler when it is running at current stage,
-				// so we just test whether the response has been sent before step into it.
-				// After handler finishes, check whether the response has been sent again in case it has been timeout.
-				// Though there is some performance waste.
-				if !ctx._IsResponseSent() {
-					finalHandler(ctx)
-				}
-			}()
-
-			// Wait for the timeout or the handler to finish.
-			select {
-			case <-handlerDone:
-				// If the response has been sent, just return
-				if !ctx._CasIsResponseSent() {
-					return
-				}
-
-				// Cancel processTimeoutCtx in case of resource leakage.
-				processCancel()
-
-				// If the handler panicked, return 500.
-				if ctx.errHandle != nil {
-					http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
-
-					gLogger.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
-					return
-				}
-				// Send normal response when no error.
-				ctx._Send()
-
-			case <-processTimeoutCtx.Done():
-				// If the response has been sent, just return
-				if !ctx._CasIsResponseSent() {
-					return
-				}
-
-				http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
-
-				gLogger.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
-			}
-		}
-
-	case <-httpctxTimeoutCtx.Done():
+	// 3. Try getting a usable context from context pool to handle the request.
+	// 	  _Get function will blocks the goroutine, whose time depends on ctxTimeoutTime.
+	ctx, err := r.contextPool._Get()
+	if err != nil {
 		// If the context pool is empty, just return 503.
 		http.Error(writer, "Server busy, try later.", http.StatusServiceUnavailable)
+		return
 	}
+
+	// Ensure that the ctx will be returned to contextPool
+	defer r.contextPool._Return(ctx)
+	// Prepare ctx after getting.
+	ctx._Update(request, writer)
+	ctx.uriParams = uriParams
+
+	// Create handler timeout context
+	timeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
+	defer processCancel()
+
+	// Conditional variable which synchronizes the processing.
+	handlerDone := make(chan struct{})
+	// Handle in another goroutine in order to apply timeout.
+	go func() {
+		// Exception catcher.
+		defer func() {
+			if r := recover(); r != nil {
+				ctx.errHandle = fmt.Errorf("panic when handling: %v", r)
+			}
+
+			// Notify the caller goroutine to go on.
+			close(handlerDone)
+		}()
+
+		// We do not support to abort a handler when it is running at current stage,
+		// so we just test whether the response has been sent before step into it.
+		// After handler finishes, check whether the response has been sent again in case it has been timeout.
+		// Though there is some performance waste.
+		if !ctx._IsResponseSent() {
+			finalHandler(ctx)
+		}
+	}()
+
+	// Wait for the timeout or the handler to finish.
+	select {
+	case <-handlerDone:
+		// If the response has been sent, just return.
+		if !ctx._CasIsResponseSent() {
+			return
+		}
+
+		// If the handler panicked, return 500.
+		if ctx.errHandle != nil {
+			http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
+
+			gLogger.Debug(fmt.Sprintf("Error occurred with: %v, route: %s", ctx.errHandle, node.pattern))
+			return
+		}
+		// Send normal response when no error.
+		ctx._Send()
+
+	case <-timeoutCtx.Done():
+		// If the response has been sent, just return
+		if !ctx._CasIsResponseSent() {
+			return
+		}
+
+		http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
+
+		gLogger.Debug(fmt.Sprintf("Timeout with route: %s", node.pattern))
+	}
+
+	// // 3. Get a timeout context in case blocking request when no context available.
+	// httpctxTimeoutCtx, httpctxCancel := context.WithTimeout(context.Background(), r.httpctxTimeoutTime)
+	// defer httpctxCancel()
+
+	// // 4. Try getting a usable context from context pool to handle the request.
+	// // 	  Or we will receive a timeout signal and just return an error response.
+	// select {
+	// case ctx := <-r.contextPool._GetRawPool():
+	// 	{
+	// 		// Ensure that the ctx will be returned to contextPool
+	// 		defer r.contextPool._Return(ctx)
+	// 		// Prepare ctx after getting.
+	// 		ctx._Update(request, writer)
+	// 		ctx.uriParams = uriParams
+
+	// 		// Create handler timeout context
+	// 		processTimeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
+	// 		defer processCancel()
+
+	// 		// Conditional variable which synchronizes the processing.
+	// 		handlerDone := make(chan struct{})
+	// 		// Handle in another goroutine in order to apply timeout.
+	// 		go func() {
+	// 			defer func() {
+	// 				if r := recover(); r != nil {
+	// 					ctx.errHandle = fmt.Errorf("panic with context(%d): %v", ctx.id, r)
+	// 				}
+
+	// 				// Notify the caller goroutine to go on.
+	// 				close(handlerDone)
+	// 			}()
+
+	// 			// We do not support to abort a handler when it is running at current stage,
+	// 			// so we just test whether the response has been sent before step into it.
+	// 			// After handler finishes, check whether the response has been sent again in case it has been timeout.
+	// 			// Though there is some performance waste.
+	// 			if !ctx._IsResponseSent() {
+	// 				finalHandler(ctx)
+	// 			}
+	// 		}()
+
+	// 		// Wait for the timeout or the handler to finish.
+	// 		select {
+	// 		case <-handlerDone:
+	// 			// If the response has been sent, just return
+	// 			if !ctx._CasIsResponseSent() {
+	// 				return
+	// 			}
+
+	// 			// Cancel processTimeoutCtx in case of resource leakage.
+	// 			processCancel()
+
+	// 			// If the handler panicked, return 500.
+	// 			if ctx.errHandle != nil {
+	// 				http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
+
+	// 				gLogger.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
+	// 				return
+	// 			}
+	// 			// Send normal response when no error.
+	// 			ctx._Send()
+
+	// 		case <-processTimeoutCtx.Done():
+	// 			// If the response has been sent, just return
+	// 			if !ctx._CasIsResponseSent() {
+	// 				return
+	// 			}
+
+	// 			http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
+
+	// 			gLogger.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
+	// 		}
+	// 	}
+
+	// case <-httpctxTimeoutCtx.Done():
+	// 	// If the context pool is empty, just return 503.
+	// 	http.Error(writer, "Server busy, try later.", http.StatusServiceUnavailable)
+	// }
 }
 
 // Create a new router.

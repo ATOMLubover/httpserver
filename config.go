@@ -16,8 +16,12 @@ type _Config struct {
 
 // Router config.
 type _RouterConfig struct {
-	ctxPoolSize        int
-	ctxTimeoutTime     time.Duration
+	ctxPoolSize            int
+	ctxSubPoolNum          int
+	ctxTimeoutTime         time.Duration
+	subpoolCleanupInterval time.Duration
+	subpoolDropTime        time.Duration
+
 	processTimeoutTime time.Duration
 }
 
@@ -34,8 +38,12 @@ var gConfig *_Config = &_Config{
 	logLevel: slog.LevelInfo,
 
 	routerCfg: _RouterConfig{
-		ctxPoolSize:        20,
-		ctxTimeoutTime:     2 * time.Second,
+		ctxPoolSize:            20,
+		ctxSubPoolNum:          5,
+		ctxTimeoutTime:         2 * time.Second,
+		subpoolCleanupInterval: 5 * time.Second,
+		subpoolDropTime:        10 * time.Second,
+
 		processTimeoutTime: 10 * time.Second,
 	},
 
@@ -81,6 +89,29 @@ func WithContextPoolSize(size int) ConfigOption {
 func WithContextPoolTimeout(timeout time.Duration) ConfigOption {
 	return func(c *_Config) {
 		c.routerCfg.ctxTimeoutTime = timeout
+	}
+}
+
+// Set the number of context sub pools.
+// Sub pools will contains the (2^(count-1)-2)*size contexts every one.
+func WithContextSubPoolCount(count int) ConfigOption {
+	return func(c *_Config) {
+		c.routerCfg.ctxSubPoolNum = count
+	}
+}
+
+// Set subpool of context pool cleanup interval.
+func WithContextSubPoolCleanupInterval(interval time.Duration) ConfigOption {
+	return func(c *_Config) {
+		c.routerCfg.subpoolCleanupInterval = interval
+	}
+}
+
+// Set subpool of context pool drop time limit.
+// A subpool which has not been used for duration will be dropped.
+func WithContextSubPoolDropTime(duration time.Duration) ConfigOption {
+	return func(c *_Config) {
+		c.routerCfg.subpoolDropTime = duration
 	}
 }
 

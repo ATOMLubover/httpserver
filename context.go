@@ -23,8 +23,6 @@ const (
 
 // HTTP context
 type Context struct {
-	id int // the identifier of the context in pool
-
 	rawRequest        *http.Request
 	rawResponseWriter http.ResponseWriter
 
@@ -46,10 +44,8 @@ type Context struct {
 }
 
 // Create a new context.
-func _NewContext(id int) *Context {
+func _NewContext() *Context {
 	ctx := &Context{
-		id: id,
-
 		rawRequest:        nil,
 		rawResponseWriter: nil,
 
@@ -205,7 +201,7 @@ func (c *Context) _Send() {
 	case 0:
 		{
 			if c.bodyBuffer == nil {
-				gLogger.Error(fmt.Sprintf("Body buffer is nil when sending response(context: %d, URI: %s).", c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Body buffer is nil when sending response(URI: %s).", c.rawRequest.RequestURI))
 				return
 			}
 
@@ -221,7 +217,7 @@ func (c *Context) _Send() {
 			if c.filepath == "" || c.filename == "" {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				gLogger.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(context: %d, URI: %s).", c.filepath, c.filename, c.id, c.rawRequest.RequestURI))
+				gLogger.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(URI: %s).", c.filepath, c.filename, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -231,7 +227,7 @@ func (c *Context) _Send() {
 			if err != nil {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				gLogger.Error(fmt.Sprintf("Failed to open file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Failed to open file(%s) when sending response(URI: %s).", c.filepath, c.rawRequest.RequestURI))
 				return
 			}
 
@@ -240,7 +236,7 @@ func (c *Context) _Send() {
 			if err != nil {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				gLogger.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(context: %d, URI: %s).", c.filepath, c.id, c.rawRequest.RequestURI))
+				gLogger.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(URI: %s).", c.filepath, c.rawRequest.RequestURI))
 				return
 			}
 

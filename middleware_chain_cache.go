@@ -175,6 +175,7 @@ func (c *_MiddlewareChainCache) _BackgroundRebuild() {
 		select {
 		case <-ticker.C:
 			c._RebuildOrder()
+
 		case <-c.closeChan:
 			return
 		}
