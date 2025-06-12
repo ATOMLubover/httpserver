@@ -182,20 +182,16 @@ func (p *_ContextPool) _Get() (*Context, error) {
 	// try creating a new subpool if the subpools does not reach the limit.
 	if emptyIdx >= 0 {
 		// _CreateSubPool function ensures that the subpool is created after being finished.
-		createdIdx := p._CreateSubPool(emptyIdx)
-
+		// And it returns the ref of ths subpool so we can use it without lock.
+		subPool := p._CreateSubPool(emptyIdx)
 		// If still too late to get a context, fallthru to search mainPool.
-		p.globalMutex.RLock()
-		subpool := p.subPools[createdIdx]
-		if subpool != nil {
-			subCtx, err := subpool._Get()
+		if subPool != nil {
+			subCtx, err := subPool._Get()
 			if err == nil {
-				p.subPools[createdIdx].lastAccess.Store(time.Now().UnixNano())
-				p.globalMutex.RUnlock()
+				subPool.lastAccess.Store(time.Now().UnixNano())
 				return subCtx, nil
 			}
 		}
-		p.globalMutex.RUnlock()
 	}
 
 	// Try getting a context from the mainpool again at last.
@@ -259,19 +255,19 @@ func (p *_ContextPool) _Return(ctx *Context) {
 // Try creating a subpool at the specified index.
 // This function will prevent cache stampede.
 // Return the index of the subpool actually created.
-func (p *_ContextPool) _CreateSubPool(index int) int {
+func (p *_ContextPool) _CreateSubPool(idx int) *_ContextSubPool {
 	// Check the target subpool.
 	p.globalMutex.RLock()
-	if p.subPools[index] != nil {
-		p.subPools[index].lastAccess.Store(time.Now().UnixNano())
+	if p.subPools[idx] != nil {
+		p.subPools[idx].lastAccess.Store(time.Now().UnixNano())
 
 		p.globalMutex.RUnlock()
-		return index
+		return p.subPools[idx]
 	}
 
 	// Find the min subpool we can create.
 	actualIdx := -1
-	for i := 0; i <= index && i < p.subPoolSliceSize; i++ {
+	for i := 0; i <= idx && i < p.subPoolSliceSize; i++ {
 		if p.subPools[i] == nil {
 			actualIdx = i
 			break
@@ -286,7 +282,7 @@ func (p *_ContextPool) _CreateSubPool(index int) int {
 		largest.lastAccess.Store(time.Now().UnixNano())
 
 		p.globalMutex.RUnlock()
-		return p.subPoolSliceSize - 1
+		return p.subPools[p.subPoolSliceSize-1]
 	}
 
 	p.globalMutex.RUnlock()
@@ -301,7 +297,7 @@ func (p *_ContextPool) _CreateSubPool(index int) int {
 		p.subPools[actualIdx].lastAccess.Store(time.Now().UnixNano())
 
 		p.globalMutex.RUnlock()
-		return actualIdx
+		return p.subPools[actualIdx]
 	}
 	p.globalMutex.RUnlock()
 	// Create subpool outside global lock.
@@ -310,9 +306,10 @@ func (p *_ContextPool) _CreateSubPool(index int) int {
 	// Try to create the actual pool.
 	p.globalMutex.Lock()
 	p.subPools[actualIdx] = subPool
+	p.subPools[actualIdx].lastAccess.Store(time.Now().UnixNano())
 	p.globalMutex.Unlock()
 
-	return actualIdx
+	return p.subPools[actualIdx]
 }
 
 // Ran in background to clenaup unused subpools.
@@ -332,33 +329,37 @@ func (p *_ContextPool) _BackgroundCleanup() {
 }
 
 // Cleanup unused subpools.
+// This function only delete one subpool at a time.
 func (p *_ContextPool) _Cleanup() {
 	// Use read lock to firstly check which subpools can bee cleaned up.
 	p.globalMutex.RLock()
 	subpoolsCopy := p.subPools
 	p.globalMutex.RUnlock()
 
-	toDelete := make([]int, 0)
+	toDelete := -1
 
-	for i := range subpoolsCopy {
+	// Reverse iterate to find the largest recently unused subpool.
+	for i := len(subpoolsCopy) - 1; i >= 0; i-- {
 		if subpoolsCopy[i] == nil {
 			continue
 		}
 
-		// Check whether the subpool is unused.
+		// Check whether the subpool is unused recently.
 		if time.Now().UnixNano()-subpoolsCopy[i].lastAccess.Load() > p.subpoolDropTime.Nanoseconds() {
-			// Try to deconstruct the subpool.
-			toDelete = append(toDelete, i)
+			// Record the index of the subpool to delete.
+			toDelete = i
+			break
 		}
+	}
 
+	if toDelete == -1 {
+		return
 	}
 
 	// Delete target subpools.
 	p.globalMutex.Lock()
-	defer p.globalMutex.Unlock()
+	p.subPools[toDelete] = nil
+	p.globalMutex.Unlock()
 
-	for _, i := range toDelete {
-		subpoolsCopy[i] = nil
-		gLogger.Debug(fmt.Sprintf("Subpool dropped: %d", i))
-	}
+	gLogger.Debug(fmt.Sprintf("Subpool dropped: %d", toDelete))
 }

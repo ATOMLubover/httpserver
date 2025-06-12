@@ -38,8 +38,8 @@ var gConfig *_Config = &_Config{
 	logLevel: slog.LevelInfo,
 
 	routerCfg: _RouterConfig{
-		ctxPoolSize:            20,
-		ctxSubPoolNum:          5,
+		ctxPoolSize:            32,
+		ctxSubPoolNum:          3,
 		ctxTimeoutTime:         2 * time.Second,
 		subpoolCleanupInterval: 5 * time.Second,
 		subpoolDropTime:        10 * time.Second,

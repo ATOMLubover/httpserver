@@ -6,12 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync/atomic"
 )
 
@@ -35,7 +31,6 @@ type Context struct {
 
 	bodyBuffer *bytes.Buffer // temporarily store the body of short response
 	filepath   string        // file physical path
-	filename   string        // complete file name
 
 	errHandle  error // the error collected when handling
 	statusCode int   // the status code to write in the response
@@ -57,7 +52,6 @@ func _NewContext() *Context {
 		sendType: 0,
 
 		bodyBuffer: bytes.NewBuffer(nil),
-		filename:   "",
 		filepath:   "",
 
 		errHandle:  nil,
@@ -91,7 +85,6 @@ func (c *Context) _Reset() {
 	c.sendType = 0
 
 	c.bodyBuffer.Reset()
-	c.filename = ""
 	c.filepath = ""
 
 	c.errHandle = nil
@@ -166,8 +159,6 @@ func (c *Context) Json(statusCode int, obj interface{}) {
 // But it is not recommanded that use this function to handle frequent file request.
 func (c *Context) StreamFile(statusCode int, filePath string) {
 	filePath = filepath.Clean(filePath)
-	filePathParts := strings.Split(filePath, string(filepath.Separator))
-	c.filename = filePathParts[len(filePathParts)-1]
 	c.filepath = filePath
 
 	c.sendType = 1
@@ -214,49 +205,16 @@ func (c *Context) _Send() {
 
 	case 1:
 		{
-			if c.filepath == "" || c.filename == "" {
+			if c.filepath == "" {
 				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
 
-				gLogger.Warn(fmt.Sprintf("File path is %s file name is %s when sending response(URI: %s).", c.filepath, c.filename, c.rawRequest.RequestURI))
+				gLogger.Warn(fmt.Sprintf("File(path: %s) failed when sending response(URI: %s).", c.filepath, c.rawRequest.RequestURI))
 				return
 			}
 
-			// Open file.
-			file, err := os.Open(c.filepath)
-			defer file.Close()
-			if err != nil {
-				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
-
-				gLogger.Error(fmt.Sprintf("Failed to open file(%s) when sending response(URI: %s).", c.filepath, c.rawRequest.RequestURI))
-				return
-			}
-
-			// Get meta.
-			meta, err := file.Stat()
-			if err != nil {
-				http.Error(c.rawResponseWriter, "File response failed.", http.StatusInternalServerError)
-
-				gLogger.Error(fmt.Sprintf("Failed to get meta of file(%s) when sending response(URI: %s).", c.filepath, c.rawRequest.RequestURI))
-				return
-			}
-
-			// Set content length.
-			fileSize := meta.Size()
-			c.SetHeader("Content-Length", strconv.FormatInt(fileSize, 10))
-
-			contentType := mime.TypeByExtension(filepath.Ext(c.filepath))
-			// If contentType is "", just set it to "application/octet-stream".
-			if contentType == "" {
-				contentType = "application/octet-stream"
-			}
-
-			// Send header.
-			c.rawResponseWriter.WriteHeader(c.statusCode)
-
-			// Send file body using stream.
-			// Because we set Content-Length, chunked will disabled.
-			// But this function still apply 0-copy transferring.
-			io.Copy(c.rawResponseWriter, file)
+			c.filepath = filepath.Clean(c.filepath)
+			// Use 0-copy sendfile to minimize the performance waste.
+			http.ServeFile(c.rawResponseWriter, c.rawRequest, c.filepath)
 		}
 	}
 }
