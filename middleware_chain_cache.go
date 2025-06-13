@@ -18,7 +18,7 @@ type _MiddlewareChainCacheEntry struct {
 	value []MiddlewareFunc
 
 	lastAccess atomic.Int64 // the time last time accessed
-	isDirty    bool         // mark whether the entry is dirty
+	isUsed     bool         // mark whether the entry is used this cycle
 }
 
 // Cache for middlewares.
@@ -34,9 +34,9 @@ type _MiddlewareChainCache struct {
 	dirtyMutex     sync.Mutex             // mutex to protect dirtyList
 	createMutexMap map[string]*sync.Mutex // locks at key level for creating new entry
 
-	lruList   *list.List               // linked list for approximate LRU
-	dirtyList *list.List               // linked list for rebuilding
-	entries   map[string]*list.Element // store the middleware chain directly
+	lruList  *list.List               // linked list for approximate LRU
+	usedList *list.List               // linked list for rebuilding
+	entries  map[string]*list.Element // store the middleware chain directly
 
 	// for stats
 	hits      atomic.Uint32
@@ -52,9 +52,9 @@ func _NewMiddlewareChainCache() *_MiddlewareChainCache {
 		rebuildInterval: gConfig.midChainCacheCfg.rebuildInterval,
 		closeChan:       make(chan struct{}),
 
-		lruList:   list.New(),
-		dirtyList: list.New(),
-		entries:   make(map[string]*list.Element),
+		lruList:  list.New(),
+		usedList: list.New(),
+		entries:  make(map[string]*list.Element),
 
 		createMutexMap: make(map[string]*sync.Mutex),
 	}
@@ -93,12 +93,12 @@ func (c *_MiddlewareChainCache) _TryGettingInCache(key string) []MiddlewareFunc 
 			entry.globalMutex.Lock()
 			defer entry.globalMutex.Unlock()
 
-			if !entry.isDirty {
+			if !entry.isUsed {
 				c.dirtyMutex.Lock()
 				defer c.dirtyMutex.Unlock()
 
-				entry.isDirty = true
-				c.dirtyList.PushBack(entry)
+				entry.isUsed = true
+				c.usedList.PushBack(entry)
 			}
 		}()
 
@@ -189,15 +189,15 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 	c.globalMutex.Lock()
 	defer c.globalMutex.Unlock()
 
-	dirtyEntries := make([]*_MiddlewareChainCacheEntry, 0, c.dirtyList.Len())
+	dirtyEntries := make([]*_MiddlewareChainCacheEntry, 0, c.usedList.Len())
 
 	// Collect every dirty entry.
-	for elem := c.dirtyList.Front(); elem != nil; elem = elem.Next() {
+	for elem := c.usedList.Front(); elem != nil; elem = elem.Next() {
 		entry := elem.Value.(*_MiddlewareChainCacheEntry)
 		dirtyEntries = append(dirtyEntries, entry)
 	}
 	// Clear the dirty list.
-	c.dirtyList.Init()
+	c.usedList.Init()
 
 	// Sort the dirty entries by last access time, with most LRU in front.
 	sort.Slice(dirtyEntries, func(i, j int) bool {
@@ -211,7 +211,7 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 
 	// Store dirty entries first.
 	for _, entry := range dirtyEntries {
-		entry.isDirty = false
+		entry.isUsed = false
 		newLruList.PushBack(entry)
 
 		processed[entry] = struct{}{}
@@ -265,14 +265,14 @@ func (c *_MiddlewareChainCache) _InvalidateMiddlewareChain(prefix string) {
 
 	// Invalidate entries related to the prefix in dirtyList.
 	toDelete = make([]*list.Element, 0)
-	for e := c.dirtyList.Front(); e != nil; e = e.Next() {
+	for e := c.usedList.Front(); e != nil; e = e.Next() {
 		entry := e.Value.(*_MiddlewareChainCacheEntry)
 		if strings.HasPrefix(entry.key, prefix) {
 			toDelete = append(toDelete, e)
 		}
 	}
 	for _, e := range toDelete {
-		c.dirtyList.Remove(e)
+		c.usedList.Remove(e)
 	}
 
 	// Lastly, remove the related entries from the map.

@@ -32,7 +32,7 @@ func (t *_RouteTree) _Insert(method Method, pattern string, group *RouteGroup, h
 func (t *_RouteTree) _Search(uri string, method Method) (*_RouteNode, map[string]string) {
 	uriParts, err := _TransformUriIntoParts(uri)
 	if err != nil {
-		gLogger.Debug(fmt.Sprintf("invalid uri access: %s, method: %s", uri, method))
+		gLogger.Debug(fmt.Sprintf("Invalid uri access: %s, method: %s", uri, method))
 		return nil, nil
 	}
 

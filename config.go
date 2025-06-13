@@ -41,7 +41,7 @@ var gConfig *_Config = &_Config{
 		ctxPoolSize:            32,
 		ctxSubPoolNum:          3,
 		ctxTimeoutTime:         2 * time.Second,
-		subpoolCleanupInterval: 5 * time.Second,
+		subpoolCleanupInterval: 10 * time.Second,
 		subpoolDropTime:        10 * time.Second,
 
 		processTimeoutTime: 10 * time.Second,

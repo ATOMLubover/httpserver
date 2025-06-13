@@ -113,11 +113,15 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 	newNode.isWildcard = currentPart[0] == ':' || currentPart == "*"
 
 	// afterall, do not allow asterisk wildcard as a parent of another wildcard
-	if currentPart == "*" {
+	if strings.HasPrefix(currentPart, "*") {
 		if len(remainingParts) > 0 {
 			panic("wildcard '*' must be the last part")
 		}
+
+		newNode.group = group
+
 		newNode.isLeaf = true
+		newNode.isWildcard = true
 		newNode.pattern = fullPattern
 		newNode.handlers[method] = handler
 	}
@@ -125,9 +129,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 	// grow the route tree
 	n.children = append(n.children, newNode)
 	// recurse to insert the remaining parts
-	if currentPart != "*" {
-		newNode._Insert(fullPattern, remainingParts, group, method, handler)
-	}
+	newNode._Insert(fullPattern, remainingParts, group, method, handler)
 }
 
 // Find node by recursion
