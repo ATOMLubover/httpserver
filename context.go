@@ -44,8 +44,8 @@ func _NewContext() *Context {
 		rawRequest:        nil,
 		rawResponseWriter: nil,
 
-		uriParams:   nil,
-		queryParams: nil,
+		uriParams:   make(map[string]string),
+		queryParams: make(map[string]string),
 		section:     "",
 		userValues:  make(map[string]interface{}), // only this member is not nil at first
 
@@ -74,13 +74,13 @@ func (c *Context) _Reset() {
 	c.rawRequest = nil
 	c.rawResponseWriter = nil
 
-	c.uriParams = nil
-	c.queryParams = nil
-	c.section = ""
-	// Keep the original map not deconstructed.
+	for key := range c.uriParams {
+		delete(c.uriParams, key)
+	}
 	for key := range c.queryParams {
 		delete(c.queryParams, key)
 	}
+	c.section = ""
 
 	c.sendType = 0
 

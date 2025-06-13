@@ -21,24 +21,7 @@ type _Router struct {
 
 // Implement http.Handler interface.
 func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	// 1. Find the route node which can handle the request.
-	method := stringToMethod[request.Method]
-	node, uriParams := r.routeTree._Search(request.URL.Path, method)
-	if node == nil {
-		gLogger.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
-		// Return 400 if server cannot handle the request.
-		http.Error(writer, "Invalid request URI.", http.StatusNotFound)
-		return
-	}
-
-	// 2. If a matching route node is found, assemble the final handler.
-	finalHandler := node.handlers[method]
-	middlewareChain := node.group._GetMiddlewareChain()
-	for i := len(middlewareChain) - 1; i >= 0; i-- {
-		finalHandler = middlewareChain[i](finalHandler)
-	}
-
-	// 3. Try getting a usable context from context pool to handle the request.
+	// 1. Try getting a usable context from context pool to handle the request.
 	// 	  _Get function will blocks the goroutine, whose time depends on ctxTimeoutTime.
 	ctx, err := r.contextPool._Get()
 	if err != nil {
@@ -46,20 +29,35 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "Server busy, try later.", http.StatusServiceUnavailable)
 		return
 	}
-
 	// Ensure that the ctx will be returned to contextPool
 	defer r.contextPool._Return(ctx)
 	// Prepare ctx after getting.
 	ctx._Update(request, writer)
-	ctx.uriParams = uriParams
 
-	// Create handler timeout context
+	// 2. Find the route node which can handle the request.
+	method := stringToMethod[request.Method]
+	node := r.routeTree._Search(request.URL.Path, method, &ctx.uriParams)
+	if node == nil {
+		gLogger.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
+		// Return 400 if server cannot handle the request.
+		http.Error(writer, "Invalid request URI.", http.StatusNotFound)
+		return
+	}
+
+	// 3. If a matching route node is found, assemble the final handler.
+	finalHandler := node.handler
+	middlewareChain := node.group._GetMiddlewareChain()
+	for i := len(middlewareChain) - 1; i >= 0; i-- {
+		finalHandler = middlewareChain[i](finalHandler)
+	}
+
+	// 4. Create handler timeout context
 	timeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
 	defer processCancel()
-
 	// Conditional variable which synchronizes the processing.
 	handlerDone := make(chan struct{})
-	// Handle in another goroutine in order to apply timeout.
+
+	// 5. Handle in another goroutine in order to apply timeout.
 	go func() {
 		// Exception catcher.
 		defer func() {
@@ -80,7 +78,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}()
 
-	// Wait for the timeout or the handler to finish.
+	// 6. Wait for the timeout or the handler to finish.
 	select {
 	case <-handlerDone:
 		// If the response has been sent, just return.
@@ -108,85 +106,6 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 		gLogger.Debug(fmt.Sprintf("Timeout with route: %s", node.pattern))
 	}
-
-	// // 3. Get a timeout context in case blocking request when no context available.
-	// httpctxTimeoutCtx, httpctxCancel := context.WithTimeout(context.Background(), r.httpctxTimeoutTime)
-	// defer httpctxCancel()
-
-	// // 4. Try getting a usable context from context pool to handle the request.
-	// // 	  Or we will receive a timeout signal and just return an error response.
-	// select {
-	// case ctx := <-r.contextPool._GetRawPool():
-	// 	{
-	// 		// Ensure that the ctx will be returned to contextPool
-	// 		defer r.contextPool._Return(ctx)
-	// 		// Prepare ctx after getting.
-	// 		ctx._Update(request, writer)
-	// 		ctx.uriParams = uriParams
-
-	// 		// Create handler timeout context
-	// 		processTimeoutCtx, processCancel := context.WithTimeout(context.Background(), r.processTimeoutTime)
-	// 		defer processCancel()
-
-	// 		// Conditional variable which synchronizes the processing.
-	// 		handlerDone := make(chan struct{})
-	// 		// Handle in another goroutine in order to apply timeout.
-	// 		go func() {
-	// 			defer func() {
-	// 				if r := recover(); r != nil {
-	// 					ctx.errHandle = fmt.Errorf("panic with context(%d): %v", ctx.id, r)
-	// 				}
-
-	// 				// Notify the caller goroutine to go on.
-	// 				close(handlerDone)
-	// 			}()
-
-	// 			// We do not support to abort a handler when it is running at current stage,
-	// 			// so we just test whether the response has been sent before step into it.
-	// 			// After handler finishes, check whether the response has been sent again in case it has been timeout.
-	// 			// Though there is some performance waste.
-	// 			if !ctx._IsResponseSent() {
-	// 				finalHandler(ctx)
-	// 			}
-	// 		}()
-
-	// 		// Wait for the timeout or the handler to finish.
-	// 		select {
-	// 		case <-handlerDone:
-	// 			// If the response has been sent, just return
-	// 			if !ctx._CasIsResponseSent() {
-	// 				return
-	// 			}
-
-	// 			// Cancel processTimeoutCtx in case of resource leakage.
-	// 			processCancel()
-
-	// 			// If the handler panicked, return 500.
-	// 			if ctx.errHandle != nil {
-	// 				http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
-
-	// 				gLogger.Debug(fmt.Sprintf("Error occurred with context(%d): %v, route: %s", ctx.id, ctx.errHandle, node.pattern))
-	// 				return
-	// 			}
-	// 			// Send normal response when no error.
-	// 			ctx._Send()
-
-	// 		case <-processTimeoutCtx.Done():
-	// 			// If the response has been sent, just return
-	// 			if !ctx._CasIsResponseSent() {
-	// 				return
-	// 			}
-
-	// 			http.Error(writer, "Timeout when handling.", http.StatusGatewayTimeout)
-
-	// 			gLogger.Debug(fmt.Sprintf("Timeout with context(%d), route: %s", ctx.id, node.pattern))
-	// 		}
-	// 	}
-
-	// case <-httpctxTimeoutCtx.Done():
-	// 	// If the context pool is empty, just return 503.
-	// 	http.Error(writer, "Server busy, try later.", http.StatusServiceUnavailable)
-	// }
 }
 
 // Create a new router.
@@ -211,15 +130,19 @@ func _NewRouter() *_Router {
 
 // Add a route to router
 func (r *_Router) AddRoute(method Method, pattern string, handler HandlerFunc) {
+	if method < 0 || int(method) >= len(methodToString) {
+		panic("invalid method")
+	}
+
 	if !_CheckPatternCharactors(pattern) {
 		panic("invalid URI pattern format: " + pattern)
 	}
 
 	// process root route specially
 	if pattern == "/" {
-		r.routeTree.root.handlers[method] = handler
-		r.routeTree.root.pattern = pattern
-		r.routeTree.root.isLeaf = true
+		r.routeTree.roots[method].handler = handler
+		r.routeTree.roots[method].pattern = pattern
+		r.routeTree.roots[method].isLeaf = true
 
 		gLogger.Info(fmt.Sprintf("Added root in router: %s, method: %s", pattern, method))
 
@@ -252,18 +175,15 @@ func (r *_Router) AddGroup(prefix string) *RouteGroup {
 	return child
 }
 
-// // Use a new middleware into router
-// func (r *_Router) UseMiddleware(middleware ...MiddlewareFunc) {
-// 	r.middlewares = append(r.middlewares, middleware...)
-// }
+// Add new customized method tree.
+func (r *_Router) AddMethod(method int, methodName string) {
+	if method < 0 || method < len(methodToString) {
+		panic("method existing")
+	}
 
-// // Get entire middleware chain of current route group.
-// func (r *_Router) _GetMiddlewareChain() []MiddlewareFunc {
-// 	// return middlewares of router directly, because router does not have parent
-// 	return r.middlewares
-// }
+	methodToString[Method(method)] = methodName
+	stringToMethod[methodName] = Method(method)
+	r.routeTree.roots = append(r.routeTree.roots, _NewRouteNode())
 
-// // Find the target route node to handle a request
-// func (r *_Router) _FindNode(uri string, method Method) (*_RouteNode, map[string]string) {
-// 	return r.routeTree._Search(uri, method)
-// }
+	gLogger.Info(fmt.Sprintf("Customized method added: %s, code: %d", methodName, method))
+}

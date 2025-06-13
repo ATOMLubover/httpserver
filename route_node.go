@@ -16,7 +16,7 @@ type _RouteNode struct {
 
 	children []*_RouteNode // children nodes
 
-	handlers map[Method]HandlerFunc // corresponding handlers(key is method)
+	handler HandlerFunc // corresponding handlers
 }
 
 // Create a new route node
@@ -31,17 +31,16 @@ func _NewRouteNode() *_RouteNode {
 
 		children: make([]*_RouteNode, 0),
 
-		handlers: make(map[Method]HandlerFunc),
+		handler: nil,
 	}
 }
 
 // Insert node by recursion
-func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *RouteGroup, method Method, handler HandlerFunc) {
+func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *RouteGroup, handler HandlerFunc) {
 	// n is parent actually, so just end the recursion and modify n
 	if len(patternParts) == 0 {
-		if n.handlers != nil && n.handlers[method] != nil {
-			gLogger.Warn(fmt.Sprintf("Route %s '%s' already exists, overwriting...",
-				method, fullPattern))
+		if n.handler != nil {
+			gLogger.Warn(fmt.Sprintf("Route '%s' already exists, overwriting...", fullPattern))
 		}
 
 		// Set the route group of the node inserted.
@@ -49,7 +48,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 
 		n.pattern = fullPattern
 		n.isLeaf = true
-		n.handlers[method] = handler
+		n.handler = handler
 
 		gLogger.Debug("Inserted route: " + fullPattern)
 
@@ -69,7 +68,7 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 				panic("wildcard can only be the last part")
 			}
 
-			child._Insert(fullPattern, remainingParts, group, method, handler)
+			child._Insert(fullPattern, remainingParts, group, handler)
 			return
 		}
 	}
@@ -123,25 +122,28 @@ func (n *_RouteNode) _Insert(fullPattern string, patternParts []string, group *R
 		newNode.isLeaf = true
 		newNode.isWildcard = true
 		newNode.pattern = fullPattern
-		newNode.handlers[method] = handler
+		newNode.handler = handler
+
+		n.children = append(n.children, newNode)
+
+		return
 	}
 
 	// grow the route tree
 	n.children = append(n.children, newNode)
 	// recurse to insert the remaining parts
-	newNode._Insert(fullPattern, remainingParts, group, method, handler)
+	newNode._Insert(fullPattern, remainingParts, group, handler)
 }
 
 // Find node by recursion
-func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params *map[string]string) *_RouteNode {
+func (n *_RouteNode) _Find(uriParts []string, height int, params *map[string]string) *_RouteNode {
 	// end recursion when matching all parts
 	if height == len(uriParts) {
 		if n.isLeaf {
-			gLogger.Debug(fmt.Sprintf("Leaf node matched: %v, method: %s, params: %v",
-				n.pattern, method, *params))
+			gLogger.Debug(fmt.Sprintf("Leaf node matched: %v, params: %v", n.pattern, *params))
 			return n
 		}
-		gLogger.Debug(fmt.Sprintf("No leaf node matched with: %v, method: %s", uriParts, method))
+		gLogger.Debug(fmt.Sprintf("No leaf node matched with: %v", uriParts))
 		return nil
 	}
 
@@ -153,7 +155,7 @@ func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params 
 			continue
 		}
 
-		found := child._Find(uriParts, height+1, method, params)
+		found := child._Find(uriParts, height+1, params)
 		if found != nil {
 			return found
 		}
@@ -179,7 +181,7 @@ func (n *_RouteNode) _Find(uriParts []string, height int, method Method, params 
 				(*params)[paramKey] = currentPart
 			}
 
-			found := child._Find(uriParts, height+1, method, params)
+			found := child._Find(uriParts, height+1, params)
 			if found != nil {
 				return found
 			}

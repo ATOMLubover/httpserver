@@ -134,6 +134,11 @@ func (s *Server) GetGlobalRouteGroup() *RouteGroup {
 	return &s.router.RouteGroup
 }
 
+// Add new HTTP method.
+func (s *Server) AddMethod(method int, methodName string) {
+	s.router.AddMethod(method, methodName)
+}
+
 // Get the listening address.
 func (s *Server) GetAddr() string {
 	return "*" + s.port
