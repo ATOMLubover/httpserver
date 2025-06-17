@@ -31,6 +31,12 @@ type _MiddlewareChainCacheConfig struct {
 	rebuildInterval time.Duration
 }
 
+// GET response cache config.
+type _GetResponseCacheConfig struct {
+	maxSize         int
+	rebuildInterval time.Duration
+}
+
 // Instance of gConfig.
 // Default values in.
 var gConfig *_Config = &_Config{
@@ -38,7 +44,7 @@ var gConfig *_Config = &_Config{
 	logLevel: slog.LevelInfo,
 
 	routerCfg: _RouterConfig{
-		ctxPoolSize:            32,
+		ctxPoolSize:            64,
 		ctxSubPoolNum:          3,
 		ctxTimeoutTime:         2 * time.Second,
 		subpoolCleanupInterval: 10 * time.Second,
@@ -51,6 +57,11 @@ var gConfig *_Config = &_Config{
 		maxSize:         10,
 		rebuildInterval: 1 * time.Second,
 	},
+}
+
+// Get the config.
+func GetConfig() _Config {
+	return *gConfig
 }
 
 // Set the config.

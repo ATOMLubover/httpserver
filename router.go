@@ -36,7 +36,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	// 2. Find the route node which can handle the request.
 	method := stringToMethod[request.Method]
-	node := r.routeTree._Search(request.URL.Path, method, &ctx.uriParams)
+	node := r.routeTree._Search(request.URL.Path, method, &ctx.reqData.uriParams)
 	if node == nil {
 		gLogger.Debug(fmt.Sprintf("Invalid request URI: %s, method: %s", request.URL.Path, request.Method))
 		// Return 400 if server cannot handle the request.
@@ -121,8 +121,8 @@ func _NewRouter() *_Router {
 			middlewares: make([]MiddlewareFunc, 0),
 		},
 
-		httpctxTimeoutTime: time.Second * 3, // wait 3sec when trying getting Context
-		processTimeoutTime: time.Second * 5, // handler will have 5sec to process after getting a context
+		httpctxTimeoutTime: gConfig.routerCfg.ctxTimeoutTime,
+		processTimeoutTime: gConfig.routerCfg.processTimeoutTime,
 
 		contextPool: _NewContextPool(),
 	}

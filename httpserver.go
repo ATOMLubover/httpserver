@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -101,7 +102,8 @@ func (s *Server) Serve() (res error) {
 	gLogger.Info(fmt.Sprintf("Server now listening on port %s", s.port))
 
 	exePath, _ := os.Executable()
-	gLogger.Info("Current executable directory: " + exePath)
+	exeDir := filepath.Dir(exePath)
+	gLogger.Info("Current executable directory: " + exeDir)
 
 	quitChan := make(chan os.Signal, 1)
 	signal.Notify(quitChan, syscall.SIGTERM, syscall.SIGINT)
