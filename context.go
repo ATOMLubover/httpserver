@@ -32,9 +32,9 @@ const UPLOAD_TMP_REL_DIR = "/tmp/upload/"
 
 // Request form file meta.
 type FormFileMeta struct {
-	FieldName string // field name
-	FileName  string // file name
-	FileSize  int64  // file size
+	fieldName string // field name
+	fileName  string // file name
+	fileSize  int64  // file size
 
 	contentType string // content type of file
 
@@ -43,6 +43,42 @@ type FormFileMeta struct {
 
 	memFile  *bytes.Buffer // meta of memory file
 	tempFile *os.File      // meta of temp file
+}
+
+// Get the file name of form.
+func (f *FormFileMeta) GetFileName() string {
+	return f.fileName
+}
+
+// Get the field name of form.
+func (f *FormFileMeta) GetFieldName() string {
+	return f.fieldName
+}
+
+// Get the size of file.
+func (f *FormFileMeta) GetFileSize() int64 {
+	return f.fileSize
+}
+
+// Get the content type of file.
+func (f *FormFileMeta) GetContentType() string {
+	return f.contentType
+}
+
+// Get the temp *os.File.
+func (f *FormFileMeta) GetTempFile() *os.File {
+	return f.tempFile
+}
+
+// Get the file buffer in memory.
+// It is invalid when GetIsTemp() returns true.
+func (f *FormFileMeta) GetMemFile() *bytes.Buffer {
+	return f.memFile
+}
+
+// Check whether the file is stored as temp file.
+func (f *FormFileMeta) GetIsTemp() bool {
+	return f.isTemp
 }
 
 // Request data.
@@ -75,7 +111,7 @@ type Context struct {
 	reqData *_RequestData
 	resData *_ResponseData
 
-	errHandle error // the error collected when handling
+	errHandle error // the panic collected when handling
 
 	isFormParsed   bool   // whether the form data has been parsed
 	isResponseSent uint32 // atomic flag, 0 for false, 1 for true
@@ -104,7 +140,7 @@ func _NewContext() *Context {
 			bodyBuffer: bytes.NewBuffer(nil),
 			filepath:   "",
 
-			statusCode: http.StatusOK, // default as 200
+			statusCode: -1, // default as -1
 		},
 
 		errHandle: nil,
@@ -156,7 +192,7 @@ func (c *Context) _Reset() {
 		c.resData.bodyBuffer.Reset()
 		c.resData.filepath = ""
 
-		c.resData.statusCode = http.StatusOK
+		c.resData.statusCode = -1
 	}
 
 	c.errHandle = nil
@@ -212,7 +248,7 @@ func (c *Context) LoadKeyValue(key string) (interface{}, bool) {
 }
 
 // Return text/plain response
-func (c *Context) Text(statusCode int, msg string) {
+func (c *Context) ResText(statusCode int, msg string) {
 	c.rawResponseWriter.Header().Set("Content-Type", "text/plain")
 	c.resData.bodyBuffer.WriteString(msg)
 
@@ -220,7 +256,7 @@ func (c *Context) Text(statusCode int, msg string) {
 }
 
 // Return JSON response.
-func (c *Context) Json(statusCode int, obj interface{}) {
+func (c *Context) ResJson(statusCode int, obj interface{}) {
 	c.rawResponseWriter.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(c.resData.bodyBuffer).Encode(obj)
 
@@ -229,7 +265,7 @@ func (c *Context) Json(statusCode int, obj interface{}) {
 
 // Return file response using stream.
 // But it is not recommanded that use this function to handle frequent file request.
-func (c *Context) File(statusCode int, filePath string) {
+func (c *Context) ResFile(statusCode int, filePath string) {
 	filePath = filepath.Clean(filePath)
 	c.resData.filepath = filePath
 
@@ -238,12 +274,12 @@ func (c *Context) File(statusCode int, filePath string) {
 
 // Set the header of response.
 // Notice that an existing header with the same key will not overwritten.
-func (c *Context) AppendHeader(key, value string) {
+func (c *Context) AppendResHeader(key, value string) {
 	c.rawResponseWriter.Header().Add(key, value)
 }
 
 // Modify existing header.
-func (c *Context) ModifyHeader(key string, values ...string) {
+func (c *Context) ModifyResHeader(key string, values ...string) {
 	c.rawResponseWriter.Header()[key] = values
 }
 
@@ -368,8 +404,8 @@ func (c *Context) _ProcessFilePart(part *multipart.Part) error {
 	filename := filepath.Base(part.FileName())
 
 	fileMeta := &FormFileMeta{
-		FieldName: fieldname,
-		FileName:  filename,
+		fieldName: fieldname,
+		fileName:  filename,
 
 		contentType: part.Header.Get("Content-Type"),
 
@@ -385,7 +421,7 @@ func (c *Context) _ProcessFilePart(part *multipart.Part) error {
 	if n < PART_MAX_INIT_READ_SIZE && err == io.EOF {
 		// Save directly in memory.
 		fileMeta.isTemp = false
-		fileMeta.FileSize = n
+		fileMeta.fileSize = n
 
 		c.reqData.formFiles[fieldname] = fileMeta
 		return nil
@@ -434,10 +470,18 @@ func (c *Context) _HanldleLargeFileSaving(part *multipart.Part, meta *FormFileMe
 		return fmt.Errorf("error when getting stat of temp file: %w", err)
 	}
 
+	// Refresh temp file.
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error when syncing temp file: %w", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("error when seeking temp file: %w", err)
+	}
+
 	meta.isTemp = true
 	meta.tempFile = file
 	meta.tempPath = file.Name()
-	meta.FileSize = stat.Size()
+	meta.fileSize = stat.Size()
 
 	fieldname := part.FormName()
 	c.reqData.formFiles[fieldname] = meta
@@ -447,7 +491,6 @@ func (c *Context) _HanldleLargeFileSaving(part *multipart.Part, meta *FormFileMe
 // Get request form values.
 func (c *Context) FormValues(field string) (string, bool) {
 	if err := c._ParseMultipartFormData(); err != nil {
-		c.errHandle = err
 		return "", false
 	}
 
@@ -458,7 +501,6 @@ func (c *Context) FormValues(field string) (string, bool) {
 // Get request form files(meta only).
 func (c *Context) FormFile(key string) (*FormFileMeta, bool) {
 	if err := c._ParseMultipartFormData(); err != nil {
-		c.errHandle = err
 		return nil, false
 	}
 

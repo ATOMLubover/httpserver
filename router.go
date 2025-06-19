@@ -87,7 +87,7 @@ func (r *_Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 
 		// If the handler panicked, return 500.
-		if ctx.errHandle != nil {
+		if ctx.resData.statusCode == -1 || ctx.errHandle != nil {
 			http.Error(writer, "Error occurred when handling.", http.StatusInternalServerError)
 
 			gLogger.Debug(fmt.Sprintf("Error occurred with: %v, route: %s", ctx.errHandle, node.pattern))

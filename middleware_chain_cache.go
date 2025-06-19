@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"container/list"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -239,10 +238,10 @@ func (c *_MiddlewareChainCache) _RebuildOrder() {
 
 	c.lruList = newLruList
 
-	// log stats data
-	gLogger.Debug(fmt.Sprintf(
-		"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
-		c.hits.Load(), c.misses.Load(), c.evictions.Load()))
+	// // log stats data
+	// gLogger.Debug(fmt.Sprintf(
+	// 	"Middleware chain cache rebuild order: hits=%d, misses=%d, evictions=%d",
+	// 	c.hits.Load(), c.misses.Load(), c.evictions.Load()))
 }
 
 // Modify middleware chain cache of specific route group.
