@@ -283,6 +283,19 @@ func (c *Context) ModifyResHeader(key string, values ...string) {
 	c.rawResponseWriter.Header()[key] = values
 }
 
+// Abort with status code.
+// This function will lead to an immidiate empty response.
+// Any changes after this function will not make sense.
+func (c *Context) Abort(statusCode int) {
+	// Make sure response will not be sent twice.
+	if !c._CasIsResponseSent() {
+		return
+	}
+
+	c.rawResponseWriter.Header().Add("Content-Length", "0")
+	c.rawResponseWriter.WriteHeader(statusCode)
+}
+
 // Send response.
 // We always send header first and then send the body.
 func (c *Context) _Send() {
